@@ -153,27 +153,27 @@ int lrg_next_linerange(const char **ptr, long *start, long *end) {
                 return -1;
             line1 = LONG_MAX;
         }
-        
+
         if (*endptr == ',') { /* 50-100,200-500... */
             if (!line0 || !line1)
                 return -1;
-            
+
             *start = line0, *end = line1, *ptr = endptr + 1;
             return 0;
-        
+
         } else if (!*endptr) { /* end */
             if (!line0 || !line1)
                 return -1;
             *start = line0, *end = line1, *ptr = endptr;
             return 0;
-        
+
         } else {
             return -1; /* invalid */
         }
-    
+
     } else if (*endptr == '~') { /* 50~ or 50~10... */
         unsigned long linec;
-        
+
         str = endptr + 1;
         linec = strtoul(str, &endptr, 10);
         if (str == endptr) { /* no M */
@@ -181,39 +181,39 @@ int lrg_next_linerange(const char **ptr, long *start, long *end) {
                 return -1;
             linec = 3;
         }
-    
+
         if (*endptr == ',') { /* 50~, ... */
             if (!line0 || !linec)
                 return -1;
-            
+
             *start = line0 - linec, *end = line0 + linec, *ptr = endptr + 1;
             return 0;
-        
+
         } else if (!*endptr) { /* end */
             if (!line0 || !linec)
                 return -1;
-            
+
             *start = line0 - linec, *end = line0 + linec, *ptr = endptr;
             return 0;
-        
+
         } else {
             return -1; /* invalid */
         }
-    
+
     } else if (*endptr == ',') { /* 2,5... */
         if (!line0)
             return -1;
-        
+
         *start = line0, *end = line0, *ptr = endptr + 1;
         return 0;
-    
+
     } else if (!*endptr) { /* end */
         if (!line0)
             return -1;
-        
+
         *start = line0, *end = line0, *ptr = endptr;
         return 0;
-    
+
     } else {
         return -1; /* invalid */
     }
@@ -239,13 +239,13 @@ int lrg_nextfile(const char *fn, const char *ln) {
             return 1;
         }
     }
-    
+
     lrg_initline(&line, tmpbuf, BUFSIZE);
 
     can_seek = ftell(f) >= 0;
     if (show_files)
         printf("%s\n", fn);
-    
+
     while ((pl = lrg_next_linerange(&ln, &l0, &l1)) <= 0) {
         if (pl < 0) {
             lrg_invalid_range(oldptr);
@@ -259,10 +259,10 @@ int lrg_nextfile(const char *fn, const char *ln) {
             l1 = l0;
             l0 = tmp;
         }
-    
+
         if (l0 < 1)
             l0 = 1;
-        
+
         if (l0 <= line.line_num) {
             if (can_seek) {
                 if (fseek(f, 0, SEEK_SET)) {
@@ -278,18 +278,18 @@ int lrg_nextfile(const char *fn, const char *ln) {
                 goto unwind;
             }
         }
-        
+
         while ((status = lrg_nextline(&line, f)) > 0) {
             if (line.line_num < l0)
                 continue;
-            
+
             if (line.newline && show_lines)
                 printf("%7ld   ", line.line_num);
             fwrite(line.data, line.size, 1, stdout);
             if (line.eol && line.line_num == l1)
                 break;
         }
-    
+
         if (status < 0) {
             /* file error */
             lrg_perror(fn);
@@ -300,9 +300,7 @@ int lrg_nextfile(const char *fn, const char *ln) {
             /* reached the end of the file before l0 or l1 */
             if (warn_noline)
                 fprintf(stderr, "%s: EOF before line %ld (last = %ld)\n",
-                        myname, 
-                        line.line_num >= l0 ? l1 : l0,
-                        line.line_num);
+                        myname, line.line_num >= l0 ? l1 : l0, line.line_num);
             returncode = 0;
             goto unwind;
         }
