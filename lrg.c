@@ -34,7 +34,7 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
-#define USE_POSIX_EXIT_CODES 0
+#define USE_POSIX_EXIT_CODES 1
 #define BUFSIZE 404
 char tmpbuf[BUFSIZE];
 
