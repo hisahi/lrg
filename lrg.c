@@ -296,9 +296,9 @@ int lrg_nextfile(const char *fn, const char *ln) {
             returncode = 1;
             goto unwind;
         }
-        if (status == 0 && l1 < LONG_MAX) {
+        if (status == 0) {
             /* reached the end of the file before l0 or l1 */
-            if (warn_noline)
+            if (warn_noline && l1 != LONG_MAX)
                 fprintf(stderr, "%s: EOF before line %ld (last = %ld)\n",
                         myname, line.line_num >= l0 ? l1 : l0, line.line_num);
             returncode = 0;
