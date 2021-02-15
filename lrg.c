@@ -470,18 +470,18 @@ int main(int argc, char **argv) {
                     }
                 }
             }
-        } else if (inputLines <= 0) {
+        } else if (!inputLines) {
             inputLines = i;
             if (lrg_parse_lines(argv[inputLines]))
-                return EXITCODE_ERR;
+                return EXITCODE_USE;
         } else {
             argv[fend++] = argv[i];
         }
     }
 
-    if (inputLines <= 0) {
+    if (!inputLines) {
         lrg_showusage();
-        return EXITCODE_ERR;
+        return EXITCODE_USE;
     }
 
     if (!fend) { /* no input files */
