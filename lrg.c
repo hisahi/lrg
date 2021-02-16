@@ -233,10 +233,8 @@ INLINE void lrg_alloc_fail(void) {
 
 /* end of translatable strings, beginning of code */
 
-#if LRG_POSIX
-/* optimized POSIX implementation */
+#if LRG_POSIX /* optimized POSIX implementation */
 
-#define NEXTLINE_FD 1
 #define GET_FILE_FD fileno
 
 char *buf_next;
@@ -257,21 +255,21 @@ INLINE int lrg_nextline(struct lrg_lineout *line, int fd) {
         ssize_t n = read(fd, tmpbuf, sizeof(tmpbuf) - 1);
         if (n <= 0)
             return n; /* 0 for EOF, -1 for error */
-        buf_end = tmpbuf + n;
         buf_next = tmpbuf;
+        buf_end = tmpbuf + n;
         *buf_end = '\n'; /* must be here; see below */
     }
 
-    line->data = buf_next;
     ptr = memchr(buf_next, '\n', buf_end + 1 - buf_next);
+
+    line->data = buf_next;
     line->size = ptr - buf_next;
     line->eol = ptr != buf_end;
     buf_next = ptr + 1;
     return 1;
 }
 
-#else
-/* standard C implementation */
+#else /* standard C implementation */
 
 INLINE void lrg_initbufs(void) {
     tmpbuf[sizeof(tmpbuf) - 1] = '\n'; /* must be here; see lrg_nextline */
@@ -421,7 +419,7 @@ int lrg_nextfile(const char *fn) {
     struct lrg_linerange range;
     size_t i;
     linenum_t linenum = 1;
-#if NEXTLINE_FD
+#ifdef GET_FILE_FD
     int fd;
 #endif
 
@@ -438,7 +436,7 @@ int lrg_nextfile(const char *fn) {
 
     can_seek = !fseek(f, 0, SEEK_SET);
 
-#if NEXTLINE_FD
+#ifdef GET_FILE_FD
     fd = GET_FILE_FD(f);
 #endif
 
@@ -466,7 +464,7 @@ int lrg_nextfile(const char *fn) {
             }
         }
 
-#if NEXTLINE_FD
+#ifdef GET_FILE_FD
         while (linenum < range.first &&
                (status = lrg_nextline(&line, fd)) > 0) {
 #else
@@ -475,7 +473,7 @@ int lrg_nextfile(const char *fn) {
             linenum += line.eol;
         }
 
-#if NEXTLINE_FD
+#ifdef GET_FILE_FD
         while ((status = lrg_nextline(&line, fd)) > 0) {
 #else
         while ((status = lrg_nextline(&line, f)) > 0) {
