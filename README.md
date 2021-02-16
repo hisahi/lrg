@@ -12,7 +12,7 @@ which can be compiled with any standard-compatible compiler.
 
 While the base program is fully functional on ANSI C, there are some extra
 features that are supported on modern POSIX versions. In addition, the program
-provides optimizations for POSIX environments.
+has optimizations that make it run faster on POSIX than on standard ANSI.
 
 # Usage
 
