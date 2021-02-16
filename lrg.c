@@ -168,6 +168,11 @@ void lrg_printhelp(void) {
 #define OPER_OPEN "opening"
 #define OPER_READ "reading"
 
+#define OPT_ERR_INVAL "invalid option"
+#define OPT_ERR_UNSUP "option not supported on this build"
+#define OPT_ERR_PARAM "invalid or missing parameter"
+#define TRY_HELP "Try '%s --help' for more information.\n"
+
 INLINE void lrg_perror(const char *fn, const char *open) {
     fprintf(stderr, "%s: error %s %s: %s\n", myname, open, fn, strerror(errno));
 }
@@ -175,51 +180,28 @@ INLINE void lrg_perror(const char *fn, const char *open) {
 INLINE void lrg_showusage(void) {
     fprintf(stderr,
             "Usage: %s [OPTION]... range"
-            "[,range]... [input-file]...\n"
-            "Try '%s --help' for more information.\n",
+            "[,range]... [input-file]...\n" TRY_HELP,
             myname, myname);
 }
 
-INLINE void lrg_invalid_option_c(char c) {
-    fprintf(stderr,
-            "%s: invalid option -- '%c'\n"
-            "Try '%s --help' for more information.\n",
-            myname, c, myname);
+INLINE void lrg_error_option_c(const char *err, char c) {
+    fprintf(stderr, "%s: %s -- '%c'\n" TRY_HELP, myname, err, c, myname);
 }
 
-INLINE void lrg_invalid_option_s(const char *s) {
-    fprintf(stderr,
-            "%s: invalid option -- '%s'\n"
-            "Try '%s --help' for more information.\n",
-            myname, s, myname);
-}
-
-INLINE void lrg_not_supported(const char *s) {
-    fprintf(stderr,
-            "%s: option not supported on this build -- '%s'\n"
-            "Try '%s --help' for more information.\n",
-            myname, s, myname);
-}
-
-INLINE void lrg_invalid_param(const char *s) {
-    fprintf(stderr,
-            "%s: invalid or missing parameter -- '%s'\n"
-            "Try '%s --help' for more information.\n",
-            myname, s, myname);
+INLINE void lrg_error_option_s(const char *err, const char *s) {
+    fprintf(stderr, "%s: %s -- '%s'\n" TRY_HELP, myname, err, s, myname);
 }
 
 INLINE void lrg_invalid_range(const char *meta) {
-    fprintf(stderr,
-            "%s: invalid range -- '%s'\n"
-            "Try '%s --help' for more information.\n",
-            myname, meta, myname);
+    fprintf(stderr, "%s: invalid range -- '%s'\n" TRY_HELP, myname, meta,
+            myname);
 }
 
 INLINE void lrg_no_rewind(const char *meta) {
-    fprintf(stderr,
-            "%s: trying to rewind, but input file not seekable -- '%s'\n"
-            "Try '%s --help' for more information.\n",
-            myname, meta, myname);
+    fprintf(
+        stderr,
+        "%s: trying to rewind, but input file not seekable -- '%s'\n" TRY_HELP,
+        myname, meta, myname);
 }
 
 INLINE void lrg_eof_before(linenum_t target, linenum_t last) {
@@ -543,19 +525,19 @@ int main(int argc, char **argv) {
                     if (++i < argc)
                         f = atof(argv[i]);
                     if (f <= 0.001f || f > 1000000.f) {
-                        lrg_invalid_param(rest);
+                        lrg_error_option_s(OPT_ERR_PARAM, rest);
                         return EXITCODE_USE;
                     }
                     lrg_lps_init(f);
 #else
-                    lrg_not_supported(rest);
+                    lrg_error_option_s(OPT_ERR_UNSUP, rest);
                     return EXITCODE_USE;
 #endif
                 } else if (!strcmp(rest, "help")) {
                     lrg_printhelp();
                     return EXITCODE_OK;
                 } else {
-                    lrg_invalid_option_s(rest);
+                    lrg_error_option_s(OPT_ERR_INVAL, rest);
                     return EXITCODE_USE;
                 }
             } else {
@@ -572,7 +554,7 @@ int main(int argc, char **argv) {
                         lrg_printhelp();
                         return EXITCODE_OK;
                     } else {
-                        lrg_invalid_option_c(c);
+                        lrg_error_option_c(OPT_ERR_INVAL, c);
                         return EXITCODE_USE;
                     }
                 }
