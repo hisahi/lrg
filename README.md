@@ -1,18 +1,16 @@
 # lrg
 
-This utility allows showing specific lines from files, with support for
+A program that prints specific lines by number from files, with support for
 line ranges.
 
 # Building
 
 lrg is distributed as a single standalone .c file that can be compiled
-with any standard C compiler. The program by default assumes POSIX standards,
-but does not use any POSIX-specific functions and is valid ANSI C (C89)
-which can be compiled with any standard-compatible compiler.
+with any ANSI C (C89) standard-compliant C compiler.
 
-While the base program is fully functional on ANSI C, there are some extra
-features that are supported on modern POSIX versions. In addition, the program
-has optimizations that make it run faster on POSIX than on standard ANSI.
+While the base program is fully functional on ANSI C, on modern versions
+of POSIX, an enhanced and optimized version can be compiled instead (and
+will be compiled by default if one is detected).
 
 # Usage
 
