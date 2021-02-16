@@ -49,25 +49,26 @@ typedef unsigned long linenum_t;
 struct lrg_linerange {
     linenum_t first;
     linenum_t last;
+    /* original range format given as a parameter */
     const char *text;
 };
 
 struct lrg_lineout {
     char *data;
     size_t size;
+    /* is this extent the final one on its line? */
     int eol;
 };
 
-#if LRG_POSIX
 #define LRG_BUFSIZE BUFSIZ
-#else
-#define LRG_BUFSIZE 404
-#endif
 
+/* 1 more for final terminating newline */
 char tmpbuf[LRG_BUFSIZE + 1];
 struct lrg_linerange linesbuf_static[64];
 struct lrg_linerange *linesbuf = linesbuf_static;
+/* number of line ranges */
 size_t linesbuf_n = 0;
+/* capacity. if we run past, we need to reallocate the line range buffer */
 size_t linesbuf_c = sizeof(linesbuf_static) / sizeof(linesbuf_static[0]);
 
 static const char *STDIN_FILE = "-";
@@ -102,6 +103,7 @@ char lrg_lps_enable = 0;
 struct timespec posixnsreq;
 
 void lrg_lps_init(float lps) {
+    /* sleep for 1/lps seconds */
     posixnsreq.tv_sec = (long)(1. / lps);
     posixnsreq.tv_nsec = (long)(NS_PER_SEC / lps) % NS_PER_SEC;
     lrg_lps_enable = 1;
@@ -233,6 +235,7 @@ INLINE void lrg_initline(struct lrg_lineout *line) {
 
 INLINE int lrg_nextline(struct lrg_lineout *line, int fd) {
     char *ptr;
+    /* have to read more? >= because it might be buf_end + 1 */
     if (buf_next >= buf_end) {
         ssize_t n = read(fd, tmpbuf, sizeof(tmpbuf) - 1);
         if (n <= 0)
@@ -242,11 +245,14 @@ INLINE int lrg_nextline(struct lrg_lineout *line, int fd) {
         *buf_end = '\n'; /* must be here; see below */
     }
 
+    /* find newline, or the one at the very end of the buffer if none remain */
     ptr = memchr(buf_next, '\n', buf_end + 1 - buf_next);
 
     line->data = buf_next;
     line->size = ptr - buf_next;
+    /* EOL only if the next newline is not at the very end of the buffer */
     line->eol = ptr != buf_end;
+    /* skip over the newline we found */
     buf_next = ptr + 1;
     return 1;
 }
@@ -272,6 +278,8 @@ INLINE int lrg_nextline(struct lrg_lineout *line, FILE *file) {
         sz = (char *)memchr(tmpbuf, '\n', sizeof(tmpbuf)) - tmpbuf;
 
     line->size = sz;
+    /* only the end of line if we did not find a \n before the one that
+       lies at the very end of the buffer */
     line->eol = sz < sizeof(tmpbuf) - 1;
     return 1;
 }
@@ -419,6 +427,7 @@ int lrg_nextfile(const char *fn) {
     can_seek = !fseek(f, 0, SEEK_SET);
 
 #ifdef GET_FILE_FD
+    /* get fd if applicable */
     fd = GET_FILE_FD(f);
 #endif
 
@@ -430,8 +439,12 @@ int lrg_nextfile(const char *fn) {
     for (i = 0; i < linesbuf_n; ++i) {
         range = linesbuf[i];
 
+        /* do we need to go back? */
         if (range.first <= linenum) {
             if (can_seek) {
+                /* TODO: maybe not full rewind every time? we can
+                    keep a table of positions for line ranges by recording
+                    the position of their first line */
                 if (fseek(f, 0, SEEK_SET)) {
                     lrg_perror(fn, OPER_SEEK);
                     lrg_no_rewind(range.text);
@@ -440,6 +453,7 @@ int lrg_nextfile(const char *fn) {
                 }
                 linenum = 1;
             } else {
+                /* this is not a seekable file! cannot rewind */
                 lrg_no_rewind(range.text);
                 returncode = 1;
                 goto unwind;
@@ -452,6 +466,7 @@ int lrg_nextfile(const char *fn) {
 #else
         while (linenum < range.first && (status = lrg_nextline(&line, f)) > 0) {
 #endif
+            /* line-eol must be 0 or 1! */
             linenum += line.eol;
         }
 
@@ -460,7 +475,7 @@ int lrg_nextfile(const char *fn) {
 #else
         while ((status = lrg_nextline(&line, f)) > 0) {
 #endif
-            if (show_this_linenum)
+            if (show_this_linenum) /* show one line number and then not again */
                 printf(" %7lu   ", linenum), show_this_linenum = 0;
             fwrite(line.data, 1, line.size + line.eol, stdout);
 
@@ -472,7 +487,7 @@ int lrg_nextfile(const char *fn) {
                     lrg_lps_sleep();
 #endif
                 ++linenum;
-                show_this_linenum = show_linenums;
+                show_this_linenum = show_linenums; /* maybe show again */
             }
         }
 
@@ -577,7 +592,6 @@ int main(int argc, char **argv) {
         if (lrg_nextfile(NULL))
             return EXITCODE_ERR;
     } else {
-        flag_ok = 1;
         for (i = 0; i < fend; ++i) {
             if (lrg_nextfile(argv[i]))
                 return EXITCODE_ERR;
