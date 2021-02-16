@@ -10,6 +10,10 @@ with any standard C compiler. The program by default assumes POSIX standards,
 but does not use any POSIX-specific functions and is valid ANSI C (C89)
 which can be compiled with any standard-compatible compiler.
 
+While the base program is fully functional on ANSI C, there are some extra
+features that are supported on modern POSIX versions. In addition, the program
+provides optimizations for POSIX environments.
+
 # Usage
 
 ```
@@ -30,13 +34,21 @@ Line numbers start at 1.
 
 Line range formats:
    N
-                 line with line number N
+                 the line with line number N
    N-[M]
                  lines between lines N and M (inclusive)
                  if M not specified, goes until end of file
    N~[M]
-                 line numbers around N
-                 equivalent roughly to (N-M)-(N+M), therefore
+                 the lines around line number N
+                 equivalent to (N-M)-(N+M), therefore
                  displaying 2*M+1 lines
                  if M not specified, defaults to 3
+```
+
+Extra (POSIX-exclusive) feature:
+
+```
+  --lps, --lines-per-second <x>
+                 prints lines at an (approximate) top speed
+                 (minimum 0.001, maximum 1000000)
 ```
