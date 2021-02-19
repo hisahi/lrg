@@ -53,6 +53,11 @@ struct lrg_linerange {
     const char *text;
 };
 
+/* 0 = always use fillbuf_file. 1 = always use fillbuf_pipe.
+   2 (or anything else) = auto (use _file if seekable, else _pipe).
+   consider setting to 0 or 1 if branches are expensive (even if predictable) */
+#define LRG_FILLBUF_MODE 2
+
 #define LRG_BUFSIZE BUFSIZ
 
 /* 1 more for final terminating newline */
@@ -84,6 +89,14 @@ int show_linenums = 0, show_files = 0, warn_noline = 0;
 #else
 #define INLINE
 #define RESTRICT
+#endif
+
+#ifdef __GNUC__
+#define LIKELY(x) __builtin_expect((x), 1)
+#define UNLIKELY(x) __builtin_expect((x), 0)
+#else
+#define LIKELY(x) (x)
+#define UNLIKELY(x) (x)
 #endif
 
 /* support code */
@@ -168,15 +181,15 @@ void lrg_printhelp(void) {
 #define OPT_ERR_PARAM "invalid or missing parameter"
 #define TRY_HELP "Try '%s --help' for more information.\n"
 
-INLINE void lrg_perror(const char *fn, const char *open) {
-    fprintf(stderr, "%s: error %s %s: %s\n", myname, open, fn, strerror(errno));
-}
-
 INLINE void lrg_showusage(void) {
     fprintf(stderr,
             "Usage: %s [OPTION]... range"
             "[,range]... [input-file]...\n" TRY_HELP,
             myname, myname);
+}
+
+INLINE void lrg_perror(const char *fn, const char *open) {
+    fprintf(stderr, "%s: error %s %s: %s\n", myname, open, fn, strerror(errno));
 }
 
 INLINE void lrg_error_option_c(const char *err, char c) {
@@ -204,6 +217,10 @@ INLINE void lrg_eof_before(linenum_t target, linenum_t last) {
             last);
 }
 
+INLINE void lrg_broken_pipe(void) {
+    fprintf(stderr, "%s: error writing output: %s\n", myname, strerror(errno));
+}
+
 INLINE void lrg_alloc_fail(void) {
     fprintf(stderr, "%s: out of memory\n", myname);
 }
@@ -215,30 +232,43 @@ INLINE void lrg_alloc_fail(void) {
 #define GET_FILE_FD fileno
 #define FILEREF int
 /* there can be multiple newlines in a single buffer */
-#define ONE_LINE_PER_READ 0
+#define ONE_LINE_PER_READ_FILE 0
+#define ONE_LINE_PER_READ_PIPE 0
 
 INLINE void lrg_initbuffers(void) {}
 
 /* 0 for EOF, -1 for error */
-INLINE int lrg_fillbuf(char *buffer, size_t bufsize, int fd) {
+INLINE int lrg_fillbuf_file(char *buffer, size_t bufsize, int fd) {
     return read(fd, buffer, bufsize);
 }
 
+#define lrg_fillbuf_pipe lrg_fillbuf_file
+#undef LRG_FILLBUF_MODE
+#define LRG_FILLBUF_MODE 0
+
 #else /* standard C implementation */
 
-/* make sure we read the next line even if the "buffer" is not over yet */
-#define ONE_LINE_PER_READ 1
+/* make sure we read the next line even if the "buffer" is not over yet
+   only applies to pipes, fread might result in multiple lines */
+#define ONE_LINE_PER_READ_FILE 0
+#define ONE_LINE_PER_READ_PIPE 1
 
 INLINE void lrg_initbuffers(void) {}
 
 /* 0 for EOF, -1 for error */
+INLINE int lrg_fillbuf_file(char *buffer, size_t bufsize, FILE *file) {
+    size_t res = fread(buffer, 1, bufsize, file);
+    return (res < bufsize && ferror(file)) ? -1 : res;
+}
 
-INLINE int lrg_fillbuf(char *buffer, size_t bufsize, FILE *file) {
+/* 0 for EOF, -1 for error */
+/* we do not use fread for pipes because it blocks until the buffer is full */
+INLINE int lrg_fillbuf_pipe(char *buffer, size_t bufsize, FILE *file) {
     char *p = buffer;
     int c;
     while (bufsize--) {
-        c = fgetc(file);
-        if (c == EOF) {
+        c = getc(file);
+        if (UNLIKELY(c == EOF)) {
             if (ferror(file))
                 return -1;
             else
@@ -256,7 +286,7 @@ fgets is not suitable, as it cannot gracefully handle lines that contain
 null characters but do **not** end in a newline (at the very end of a file).
 there is no way to tell how long it was.
 
-INLINE int lrg_fillbuf(char *buffer, size_t bufsize, FILE *file) {
+INLINE int lrg_fillbuf_pipe(char *buffer, size_t bufsize, FILE *file) {
     char *p = fgets(buffer, bufsize, file);
     return p ? bufsize - 1 : (ferror(file) ? -1 : 0);
 }
@@ -268,7 +298,7 @@ INLINE int lrg_fillbuf(char *buffer, size_t bufsize, FILE *file) {
 #define FILEREF FILE *
 #endif
 
-int lrg_read_linenum(const char *str, const char **endptr, linenum_t *out,
+int lrg_read_linenum(char *str, char **endptr, linenum_t *out,
                      linenum_t fallback, char allow_zero) {
     linenum_t result;
     while (isspace(*str))
@@ -287,10 +317,9 @@ int lrg_read_linenum(const char *str, const char **endptr, linenum_t *out,
 }
 
 /* 0 = ok, < 0 = fail, > 0 = end */
-int lrg_next_linerange(const char **RESTRICT ptr, linenum_t *RESTRICT start,
+int lrg_next_linerange(char **RESTRICT ptr, linenum_t *RESTRICT start,
                        linenum_t *RESTRICT end) {
-    const char *str = *ptr;
-    const char *endptr;
+    char *str = *ptr, *endptr;
     linenum_t line0;
 
     if (!*str) /* end */
@@ -317,7 +346,7 @@ int lrg_next_linerange(const char **RESTRICT ptr, linenum_t *RESTRICT start,
     }
 
     if (*endptr == ',') /* 2,5-6,10~3,... */
-        ++endptr;
+        *endptr++ = 0;
     else if (*endptr) /* only comma or end of string allowed */
         return -1;
 
@@ -334,8 +363,8 @@ void lrg_free_linebuf(void) { free(linesbuf); }
         y = tmp;                                                               \
     } while (0)
 
-int lrg_parse_lines(const char *ln) {
-    const char *oldptr = ln;
+int lrg_parse_lines(char *ln) {
+    char *oldptr = ln;
     int pl = 0;
     linenum_t l0 = 0, l1 = 0;
 
@@ -381,82 +410,75 @@ int lrg_parse_lines(const char *ln) {
     return 0;
 }
 
-int lrg_nextfile(const char *fn) {
-    FILE *f;
-    int can_seek = 1;
-    int status = 0;
-    int returncode = 0;
+#define JUMP_LINE(ln)                                                          \
+    do {                                                                       \
+        lrg_initbuffers();                                                     \
+        buf_next = buf_end;                                                    \
+        linenum = ln;                                                          \
+    } while (0);
+
+INLINE int lrg_processfile(const char *fn, FILE *f) {
+    int status;
+    int can_seek = !fseek(f, 0, SEEK_SET);
     int show_this_linenum = show_linenums;
+    char *buf_start, *buf_next, *buf_end = NULL, *next_eol;
     struct lrg_linerange range;
+    linenum_t linenum;
     size_t i;
-    linenum_t linenum = 1;
-    char *buf_start, *buf_next, *buf_end, *next_eol;
-#ifdef GET_FILE_FD
-    int fd;
-#endif
-
-    if (!fn || !strcmp(fn, STDIN_FILE)) {
-        f = stdin;
-        fn = STDIN_FILENAME_APPEARANCE;
-    } else {
-        f = fopen(fn, "r");
-        if (!f) {
-            lrg_perror(fn, OPER_OPEN);
-            return 1;
-        }
-    }
-
-    can_seek = !fseek(f, 0, SEEK_SET);
 
 #ifdef GET_FILE_FD
-    /* get fd if applicable */
-    fd = GET_FILE_FD(f);
-#define READ_BUFFER(buf, sz) lrg_fillbuf(buf, sz, fd)
+    int fd = GET_FILE_FD(f);
+#define READ_BUFFER_FILE(buf, sz) lrg_fillbuf_file(buf, sz, fd)
+#define READ_BUFFER_PIPE(buf, sz) lrg_fillbuf_pipe(buf, sz, fd)
 #else
-#define READ_BUFFER(buf, sz) lrg_fillbuf(buf, sz, f)
+#define READ_BUFFER_FILE(buf, sz) lrg_fillbuf_file(buf, sz, f)
+#define READ_BUFFER_PIPE(buf, sz) lrg_fillbuf_pipe(buf, sz, f)
 #endif
 
-    if (show_files)
-        puts(fn); /* printf("%s\n", fn); */
+#if LRG_FILLBUF_MODE == 0
+#define oneline ONE_LINE_PER_READ_FILE
+#define READ_BUFFER(buf, sz) READ_BUFFER_FILE(buf, sz)
+#elif LRG_FILLBUF_MODE == 1
+#define oneline ONE_LINE_PER_READ_PIPE
+#define READ_BUFFER(buf, sz) READ_BUFFER_PIPE(buf, sz)
+#else
+    int oneline = can_seek ? ONE_LINE_PER_READ_FILE : ONE_LINE_PER_READ_PIPE;
+#define READ_BUFFER(buf, sz)                                                   \
+    (can_seek ? (READ_BUFFER_FILE(buf, sz)) : (READ_BUFFER_PIPE(buf, sz)))
+#endif
 
-    lrg_initbuffers();
-    buf_next = buf_end = NULL;
+    JUMP_LINE(1);
 
     for (i = 0; i < linesbuf_n; ++i) {
         range = linesbuf[i];
 
         /* do we need to go back? */
-        if (range.first <= linenum) {
-            if (can_seek) {
-                /* TODO: maybe not full rewind every time? we can
-                    keep a table of positions for line ranges by recording
-                    the position of their first line */
-                if (fseek(f, 0, SEEK_SET)) {
-                    lrg_perror(fn, OPER_SEEK);
-                    lrg_no_rewind(range.text);
-                    returncode = 1;
-                    goto unwind;
-                }
-                linenum = 1;
-                lrg_initbuffers();
-                buf_next = buf_end = NULL;
-            } else {
+        if (UNLIKELY(range.first < linenum)) {
+            if (!can_seek) {
                 /* this is not a seekable file! cannot rewind */
                 lrg_no_rewind(range.text);
-                returncode = 1;
-                goto unwind;
+                return 1;
             }
+
+            /* TODO: maybe not full rewind every time? we can
+                keep a table of positions for line ranges by recording
+                the position of their first line */
+            if (fseek(f, 0, SEEK_SET)) {
+                lrg_perror(fn, OPER_SEEK);
+                lrg_no_rewind(range.text);
+                return 1;
+            }
+            JUMP_LINE(1);
         }
 
         status = 1;
         for (;;) {
             /* have to read more? */
-            if (ONE_LINE_PER_READ || buf_next == buf_end) {
+            if (oneline || buf_next == buf_end) {
                 status = READ_BUFFER(tmpbuf, sizeof(tmpbuf));
                 if (status <= 0)
                     break;
-                buf_next = tmpbuf;
-                buf_end = tmpbuf + status;
+                buf_next = tmpbuf, buf_end = tmpbuf + status;
             }
 
             buf_start = buf_next;
@@ -470,36 +492,60 @@ int lrg_nextfile(const char *fn) {
 
             if (show_this_linenum) /* show one line number and then not again */
                 printf(" %7lu   ", linenum), show_this_linenum = 0;
-            fwrite(buf_start, 1, buf_next - buf_start, stdout);
 
-            if (next_eol) {
-                if (linenum == range.last)
-                    break;
+            if (UNLIKELY(!fwrite(buf_start, buf_next - buf_start, 1, stdout))) {
+                lrg_broken_pipe();
+                return 1;
+            }
+
+            if (LIKELY(next_eol != NULL)) {
 #if LRG_SUPPORT_LPS
                 if (lrg_lps_enable)
                     lrg_lps_sleep();
 #endif
-                ++linenum;
+                if (linenum++ == range.last)
+                    break;
                 show_this_linenum = show_linenums; /* maybe show again */
             }
         }
 
-        if (status < 0) {
+        if (UNLIKELY(status < 0)) {
             /* file error */
             lrg_perror(fn, OPER_READ);
-            returncode = 1;
-            goto unwind;
+            return 1;
         }
-        if (status == 0 && range.last != LINENUM_MAX) {
+        if (UNLIKELY(status == 0 && range.last != LINENUM_MAX)) {
             /* reached the end of the file before first or last line */
             if (warn_noline)
                 lrg_eof_before(
                     linenum >= range.first ? range.last : range.first, linenum);
-            returncode = 0;
-            goto unwind;
+            return 0;
         }
     }
-unwind:
+    return 0;
+#undef oneline
+}
+
+int lrg_nextfile(const char *fn) {
+    FILE *f;
+    int returncode;
+
+    if (!fn || !strcmp(fn, STDIN_FILE)) {
+        f = stdin;
+        fn = STDIN_FILENAME_APPEARANCE;
+    } else {
+        f = fopen(fn, "r");
+        if (!f) {
+            lrg_perror(fn, OPER_OPEN);
+            return 1;
+        }
+    }
+
+    if (show_files)
+        puts(fn); /* printf("%s\n", fn); */
+
+    returncode = lrg_processfile(fn, f);
+
     if (f != stdin)
         fclose(f);
     return returncode;
