@@ -205,16 +205,16 @@ INLINE void lrg_invalid_range(const char *meta) {
             myname);
 }
 
-INLINE void lrg_no_rewind(const char *meta) {
-    fprintf(
-        stderr,
-        "%s: trying to rewind, but input file not seekable -- '%s'\n" TRY_HELP,
-        myname, meta, myname);
+INLINE void lrg_no_rewind(const char *fn, const char *meta) {
+    fprintf(stderr,
+            "%s: %s: trying to rewind, but input file not seekable -- "
+            "'%s'\n" TRY_HELP,
+            myname, fn, meta, myname);
 }
 
-INLINE void lrg_eof_before(linenum_t target, linenum_t last) {
-    fprintf(stderr, "%s: EOF before line %ld (last = %ld)\n", myname, target,
-            last);
+INLINE void lrg_eof_before(const char *fn, linenum_t target, linenum_t last) {
+    fprintf(stderr, "%s: %s: EOF before line %ld (last = %ld)\n", myname, fn,
+            target, last);
 }
 
 INLINE void lrg_broken_pipe(void) {
@@ -449,7 +449,7 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
         if (UNLIKELY(range.first < linenum)) {
             if (!can_seek) {
                 /* this is not a seekable file! cannot rewind */
-                lrg_no_rewind(range.text);
+                lrg_no_rewind(fn, range.text);
                 return 1;
             }
 
@@ -458,7 +458,7 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
                 the position of their first line */
             if (fseek(f, 0, SEEK_SET)) {
                 lrg_perror(fn, OPER_SEEK);
-                lrg_no_rewind(range.text);
+                lrg_no_rewind(fn, range.text);
                 return 1;
             }
             JUMP_LINE(1);
@@ -513,7 +513,8 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
             /* reached the end of the file before first or last line */
             if (warn_noline)
                 lrg_eof_before(
-                    linenum >= range.first ? range.last : range.first, linenum);
+                    fn, linenum >= range.first ? range.last : range.first,
+                    linenum);
             return 0;
         }
     }
