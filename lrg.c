@@ -49,7 +49,7 @@ typedef unsigned long linenum_t;
 struct lrg_linerange {
     linenum_t first;
     linenum_t last;
-    /* original range format given as a parameter */
+    /* original range format given as a parameter. used for error msgs */
     const char *text;
 };
 
@@ -243,11 +243,13 @@ INLINE int lrg_fillbuf_file(char *buffer, size_t bufsize, int fd) {
 }
 
 #define lrg_fillbuf_pipe lrg_fillbuf_file
+/* since pipe/file impls are the same, just always use one of them */
 #undef LRG_FILLBUF_MODE
 #define LRG_FILLBUF_MODE 0
 
 #else /* standard C implementation */
 
+#define FILEREF FILE *
 /* make sure we read the next line even if the "buffer" is not over yet
    only applies to pipes, fread might result in multiple lines */
 #define ONE_LINE_PER_READ_FILE 0
@@ -258,15 +260,20 @@ INLINE void lrg_initbuffers(void) {}
 /* 0 for EOF, -1 for error */
 INLINE int lrg_fillbuf_file(char *buffer, size_t bufsize, FILE *file) {
     size_t res = fread(buffer, 1, bufsize, file);
-    return (res < bufsize && ferror(file)) ? -1 : res;
+    return UNLIKELY(res < bufsize && ferror(file)) ? -1 : res;
 }
 
 /* 0 for EOF, -1 for error */
-/* we do not use fread for pipes because it blocks until the buffer is full */
+/* we do not use fread for pipes because it blocks until the buffer is full.
+   however, this getc loop tends to be pretty slow compared to fread,
+   but no real alternative exists. fgets is not suitable, as it cannot
+   gracefully handle lines that contain null characters but do **not** end in
+   a newline (at the very end of a file). there is no way to reliably tell
+   its true length. */
 INLINE int lrg_fillbuf_pipe(char *buffer, size_t bufsize, FILE *file) {
     char *p = buffer;
     int c;
-    while (bufsize--) {
+    while (LIKELY(bufsize--)) {
         c = getc(file);
         if (UNLIKELY(c == EOF)) {
             if (ferror(file))
@@ -275,27 +282,12 @@ INLINE int lrg_fillbuf_pipe(char *buffer, size_t bufsize, FILE *file) {
                 break;
         }
         *p++ = c;
-        if (c == '\n')
+        if (UNLIKELY(c == '\n'))
             break;
     }
     return p - buffer;
 }
 
-/*
-fgets is not suitable, as it cannot gracefully handle lines that contain
-null characters but do **not** end in a newline (at the very end of a file).
-there is no way to tell how long it was.
-
-INLINE int lrg_fillbuf_pipe(char *buffer, size_t bufsize, FILE *file) {
-    char *p = fgets(buffer, bufsize, file);
-    return p ? bufsize - 1 : (ferror(file) ? -1 : 0);
-}
-*/
-
-#endif
-
-#ifndef FILEREF
-#define FILEREF FILE *
 #endif
 
 int lrg_read_linenum(char *str, char **endptr, linenum_t *out,
@@ -346,8 +338,8 @@ int lrg_next_linerange(char **RESTRICT ptr, linenum_t *RESTRICT start,
     }
 
     if (*endptr == ',') /* 2,5-6,10~3,... */
-        *endptr++ = 0;
-    else if (*endptr) /* only comma or end of string allowed */
+        *endptr++ = 0;  /* for printing .text later on error */
+    else if (*endptr)   /* only comma or end of string allowed */
         return -1;
 
     *ptr = endptr;
@@ -421,10 +413,10 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
     int status;
     int can_seek = !fseek(f, 0, SEEK_SET);
     int show_this_linenum = show_linenums;
-    char *buf_start, *buf_next, *buf_end = NULL, *next_eol;
+    char *buf_prev, *buf_next, *buf_end = NULL, *next_eol;
     struct lrg_linerange range;
     linenum_t linenum;
-    size_t i;
+    size_t range_i;
 
 #ifdef GET_FILE_FD
     int fd = GET_FILE_FD(f);
@@ -443,14 +435,15 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
 #define READ_BUFFER(buf, sz) READ_BUFFER_PIPE(buf, sz)
 #else
     int oneline = can_seek ? ONE_LINE_PER_READ_FILE : ONE_LINE_PER_READ_PIPE;
+    /* piece of cake for the branch predictor */
 #define READ_BUFFER(buf, sz)                                                   \
     (can_seek ? (READ_BUFFER_FILE(buf, sz)) : (READ_BUFFER_PIPE(buf, sz)))
 #endif
 
     JUMP_LINE(1);
 
-    for (i = 0; i < linesbuf_n; ++i) {
-        range = linesbuf[i];
+    for (range_i = 0; range_i < linesbuf_n; ++range_i) {
+        range = linesbuf[range_i];
 
         /* do we need to go back? */
         if (UNLIKELY(range.first < linenum)) {
@@ -481,11 +474,11 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
                 buf_next = tmpbuf, buf_end = tmpbuf + status;
             }
 
-            buf_start = buf_next;
+            buf_prev = buf_next;
             next_eol = memchr(buf_next, '\n', buf_end - buf_next);
             buf_next = next_eol ? next_eol + 1 : buf_end;
             if (linenum < range.first) {
-                if (next_eol)
+                if (LIKELY(next_eol != NULL))
                     ++linenum;
                 continue;
             }
@@ -493,7 +486,8 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
             if (show_this_linenum) /* show one line number and then not again */
                 printf(" %7lu   ", linenum), show_this_linenum = 0;
 
-            if (UNLIKELY(!fwrite(buf_start, buf_next - buf_start, 1, stdout))) {
+            /* by using fwrite this way, it returns 1 for successful write */
+            if (UNLIKELY(!fwrite(buf_prev, buf_next - buf_prev, 1, stdout))) {
                 lrg_broken_pipe();
                 return 1;
             }
@@ -508,6 +502,7 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
                 show_this_linenum = show_linenums; /* maybe show again */
             }
         }
+        /* linenum is one past range.last here if all went well */
 
         if (UNLIKELY(status < 0)) {
             /* file error */
