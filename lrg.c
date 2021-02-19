@@ -53,13 +53,6 @@ struct lrg_linerange {
     const char *text;
 };
 
-struct lrg_lineout {
-    char *data;
-    size_t size;
-    /* is this extent the final one on its line? */
-    int eol;
-};
-
 #define LRG_BUFSIZE BUFSIZ
 
 /* 1 more for final terminating newline */
@@ -220,70 +213,59 @@ INLINE void lrg_alloc_fail(void) {
 #if LRG_POSIX /* optimized POSIX implementation */
 
 #define GET_FILE_FD fileno
+#define FILEREF int
+/* there can be multiple newlines in a single buffer */
+#define ONE_LINE_PER_READ 0
 
-char *buf_next;
-char *buf_end;
+INLINE void lrg_initbuffers(void) {}
 
-INLINE void lrg_initbufs(void) {}
-
-INLINE void lrg_initline(struct lrg_lineout *line) {
-    buf_next = buf_end = NULL;
-    line->data = tmpbuf;
-    line->size = 0;
-    line->eol = 0;
-}
-
-INLINE int lrg_nextline(struct lrg_lineout *line, int fd) {
-    char *ptr;
-    /* have to read more? >= because it might be buf_end + 1 */
-    if (buf_next >= buf_end) {
-        ssize_t n = read(fd, tmpbuf, sizeof(tmpbuf) - 1);
-        if (n <= 0)
-            return n; /* 0 for EOF, -1 for error */
-        buf_next = tmpbuf;
-        buf_end = tmpbuf + n;
-        *buf_end = '\n'; /* must be here; see below */
-    }
-
-    /* find newline, or the one at the very end of the buffer if none remain */
-    ptr = memchr(buf_next, '\n', buf_end + 1 - buf_next);
-
-    line->data = buf_next;
-    line->size = ptr - buf_next;
-    /* EOL only if the next newline is not at the very end of the buffer */
-    line->eol = ptr != buf_end;
-    /* skip over the newline we found */
-    buf_next = ptr + 1;
-    return 1;
+/* 0 for EOF, -1 for error */
+INLINE int lrg_fillbuf(char *buffer, size_t bufsize, int fd) {
+    return read(fd, buffer, bufsize);
 }
 
 #else /* standard C implementation */
 
-INLINE void lrg_initbufs(void) {
-    tmpbuf[sizeof(tmpbuf) - 1] = '\n'; /* must be here; see lrg_nextline */
+/* make sure we read the next line even if the "buffer" is not over yet */
+#define ONE_LINE_PER_READ 1
+
+INLINE void lrg_initbuffers(void) {}
+
+/* 0 for EOF, -1 for error */
+
+INLINE int lrg_fillbuf(char *buffer, size_t bufsize, FILE *file) {
+    char *p = buffer;
+    int c;
+    while (bufsize--) {
+        c = fgetc(file);
+        if (c == EOF) {
+            if (ferror(file))
+                return -1;
+            else
+                break;
+        }
+        *p++ = c;
+        if (c == '\n')
+            break;
+    }
+    return p - buffer;
 }
 
-INLINE void lrg_initline(struct lrg_lineout *line) {
-    line->data = tmpbuf;
-    line->size = 0;
-    line->eol = 0;
+/*
+fgets is not suitable, as it cannot gracefully handle lines that contain
+null characters but do **not** end in a newline (at the very end of a file).
+there is no way to tell how long it was.
+
+INLINE int lrg_fillbuf(char *buffer, size_t bufsize, FILE *file) {
+    char *p = fgets(buffer, bufsize, file);
+    return p ? bufsize - 1 : (ferror(file) ? -1 : 0);
 }
+*/
 
-INLINE int lrg_nextline(struct lrg_lineout *line, FILE *file) {
-    size_t sz;
-    if (!fgets(tmpbuf, sizeof(tmpbuf) - 1, file))
-        return feof(file) ? 0 : -1;
-    else
-        /* this is safe, as tmpbuf is initialized to end with '\n' */
-        sz = (char *)memchr(tmpbuf, '\n', sizeof(tmpbuf)) - tmpbuf;
+#endif
 
-    line->size = sz;
-    /* only the end of line if we did not find a \n before the one that
-       lies at the very end of the buffer */
-    line->eol = sz < sizeof(tmpbuf) - 1;
-    return 1;
-}
-
+#ifndef FILEREF
+#define FILEREF FILE *
 #endif
 
 int lrg_read_linenum(const char *str, const char **endptr, linenum_t *out,
@@ -405,10 +387,10 @@ int lrg_nextfile(const char *fn) {
     int status = 0;
     int returncode = 0;
     int show_this_linenum = show_linenums;
-    struct lrg_lineout line;
     struct lrg_linerange range;
     size_t i;
     linenum_t linenum = 1;
+    char *buf_start, *buf_next, *buf_end, *next_eol;
 #ifdef GET_FILE_FD
     int fd;
 #endif
@@ -429,12 +411,16 @@ int lrg_nextfile(const char *fn) {
 #ifdef GET_FILE_FD
     /* get fd if applicable */
     fd = GET_FILE_FD(f);
+#define READ_BUFFER(buf, sz) lrg_fillbuf(buf, sz, fd)
+#else
+#define READ_BUFFER(buf, sz) lrg_fillbuf(buf, sz, f)
 #endif
 
     if (show_files)
         puts(fn); /* printf("%s\n", fn); */
 
-    lrg_initline(&line);
+    lrg_initbuffers();
+    buf_next = buf_end = NULL;
 
     for (i = 0; i < linesbuf_n; ++i) {
         range = linesbuf[i];
@@ -452,6 +438,8 @@ int lrg_nextfile(const char *fn) {
                     goto unwind;
                 }
                 linenum = 1;
+                lrg_initbuffers();
+                buf_next = buf_end = NULL;
             } else {
                 /* this is not a seekable file! cannot rewind */
                 lrg_no_rewind(range.text);
@@ -460,26 +448,31 @@ int lrg_nextfile(const char *fn) {
             }
         }
 
-#ifdef GET_FILE_FD
-        while (linenum < range.first &&
-               (status = lrg_nextline(&line, fd)) > 0) {
-#else
-        while (linenum < range.first && (status = lrg_nextline(&line, f)) > 0) {
-#endif
-            /* line-eol must be 0 or 1! */
-            linenum += line.eol;
-        }
+        status = 1;
+        for (;;) {
+            /* have to read more? */
+            if (ONE_LINE_PER_READ || buf_next == buf_end) {
+                status = READ_BUFFER(tmpbuf, sizeof(tmpbuf));
+                if (status <= 0)
+                    break;
+                buf_next = tmpbuf;
+                buf_end = tmpbuf + status;
+            }
 
-#ifdef GET_FILE_FD
-        while ((status = lrg_nextline(&line, fd)) > 0) {
-#else
-        while ((status = lrg_nextline(&line, f)) > 0) {
-#endif
+            buf_start = buf_next;
+            next_eol = memchr(buf_next, '\n', buf_end - buf_next);
+            buf_next = next_eol ? next_eol + 1 : buf_end;
+            if (linenum < range.first) {
+                if (next_eol)
+                    ++linenum;
+                continue;
+            }
+
             if (show_this_linenum) /* show one line number and then not again */
                 printf(" %7lu   ", linenum), show_this_linenum = 0;
-            fwrite(line.data, 1, line.size + line.eol, stdout);
+            fwrite(buf_start, 1, buf_next - buf_start, stdout);
 
-            if (line.eol) {
+            if (next_eol) {
                 if (linenum == range.last)
                     break;
 #if LRG_SUPPORT_LPS
@@ -516,7 +509,6 @@ int main(int argc, char **argv) {
     int flag_ok = 1, i, fend = 0, inputLines = 0;
     myname = argv[0];
     setlocale(LC_NUMERIC, "C");
-    lrg_initbufs();
 
     /* note: we will modify argv so that it only has the input files */
     for (i = 1; i < argc; ++i) {
