@@ -56,23 +56,31 @@ SOFTWARE.
 /* allow scanning backwards. requires that files are opened in binary mode (not
    different from text mode on most *nix systems). this is an optimization and
    not required for lrg to function. */
+#ifndef LRG_BACKWARD_SCAN
 #define LRG_BACKWARD_SCAN LRG_POSIX
+#endif
 /* do backwards scan if the target line number is greater than...
    (must always be at least 1) */
+#ifndef LRG_BACKWARD_SCAN_THRESHOLD
 #define LRG_BACKWARD_SCAN_THRESHOLD 128
+#endif
 
 /* try to use fast memcnt on supported systems?
    if your compiler does autovectorization, the "fast" memcnt may actually be
    slower, in which case you should set this to 0 */
+#ifndef LRG_TRY_FAST_MEMCNT
 #define LRG_TRY_FAST_MEMCNT 1
+#endif
 
 /* 0 = always use fillbuf_file. 1 = always use fillbuf_pipe.
    2 (or anything else) = auto (use _file if seekable, else _pipe).
-   consider setting to 0 or 1 if branches are expensive (even if predictable) */
-#define LRG_FILLBUF_MODE 2
-/* fillbuf_file will always read as much as it can. fillbuf_pipe on the other
+   consider setting to 0 or 1 if branches are expensive (even if predictable)
+   fillbuf_file will always read as much as it can. fillbuf_pipe on the other
    hand should only provide line buffering and thus can do partial reads.
-   fillbuf_pipe will never be used when seeking backwards */
+   fillbuf_pipe should never be used when seeking backwards */
+#ifndef LRG_FILLBUF_MODE
+#define LRG_FILLBUF_MODE 2
+#endif
 
 /* buffer size */
 #define LRG_BUFSIZE BUFSIZ * 4
@@ -562,6 +570,8 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
 #define READ_BUFFER(buf, sz) READ_BUFFER_FILE(buf, sz)
 #elif LRG_FILLBUF_MODE == 1
 #define READ_BUFFER(buf, sz) READ_BUFFER_PIPE(buf, sz)
+#undef LRG_BACKWARD_SCAN
+#define LRG_BACKWARD_SCAN 0
 #else
     /* piece of cake for the branch predictor */
 #define READ_BUFFER(buf, sz)                                                   \
