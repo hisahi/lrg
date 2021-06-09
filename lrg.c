@@ -84,6 +84,10 @@ SOFTWARE.
 
 /* buffer size */
 #define LRG_BUFSIZE BUFSIZ * 4
+/* line range buffer size. this is only the static allocation;
+   if there are too many ranges to fit, dynamic allocation will be used to
+   get an expanded buffer */
+#define LRG_LINEBUFSIZE 32
 
 #if LRG_C99
 typedef unsigned long long linenum_t;
@@ -146,7 +150,7 @@ struct lrg_linerange {
 };
 
 char tmpbuf[LRG_BUFSIZE];
-struct lrg_linerange linesbuf_static[64];
+struct lrg_linerange linesbuf_static[LRG_LINEBUFSIZE];
 struct lrg_linerange *linesbuf = linesbuf_static;
 /* number of line ranges */
 size_t linesbuf_n = 0;
@@ -189,7 +193,7 @@ void lrg_lps_sleep(void) { nanosleep(&posixnsreq, NULL); }
 /* in a centralized location to help with localization */
 
 void lrg_printversion(void) {
-    fprintf(stderr, "lrg by Sampo Hippeläinen (hisahi) - version " __DATE__ "\n"
+    fprintf(stdout, "lrg by Sampo Hippeläinen (hisahi) - version " __DATE__ "\n"
 #if LRG_POSIX
                     "POSIX version\n"
 #else
@@ -200,7 +204,7 @@ void lrg_printversion(void) {
 
 void lrg_printhelp(void) {
     lrg_printversion();
-    fprintf(stderr,
+    fprintf(stdout,
             "Usage: %s [OPTION]... range[,range]... "
             "[input-file]...\n"
             "Prints a specific range of lines from the given file.\n"
@@ -209,7 +213,7 @@ void lrg_printhelp(void) {
             "can be printed.\n"
             "Line numbers start at 1.\n\n",
             myname);
-    fprintf(stderr,
+    fprintf(stdout,
             "  -?, --help\n"
             "                 prints this message\n"
             "  --version\n"
@@ -223,12 +227,12 @@ void lrg_printhelp(void) {
             "  -w, --warn-eof\n"
             "                 print a warning when a line is not found\n");
 #if LRG_SUPPORT_LPS
-    fprintf(stderr,
+    fprintf(stdout,
             "  --lps, --lines-per-second <x>\n"
             "                 prints lines at an (approximate) top speed\n"
             "                 (minimum 0.001, maximum 1000000)\n");
 #endif
-    fprintf(stderr,
+    fprintf(stdout,
             "\nLine range formats:\n"
             "   N\n"
             "                 the line with line number N\n"
