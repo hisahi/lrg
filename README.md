@@ -54,3 +54,7 @@ Extra (POSIX-exclusive) feature:
                  prints lines at an (approximate) top speed
                  (minimum 0.001, maximum 1000000)
 ```
+
+# Notes
+
+All files in this repository are encoded in UTF-8.
