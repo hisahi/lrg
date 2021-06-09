@@ -35,6 +35,8 @@ näyttää korkeintaan 2M+1 riviä. M voi myös olla 0, jolloin vain rivi N
 näytetään.
 .RE
 
+Useamman kuin yhden alueen voi antaa erottamalla ne pilkuilla.
+
 Jos
 .B lrg
 yrittää näyttää rivin, jota tiedostossa ei ole (kuten riviä 100 tiedostosta,
@@ -76,6 +78,12 @@ koodin 0, jos se suoritettiin onnistuneesti, koodin 1 jos tapahtui virhe, ja
 koodin 2 jos komentoa yritettiin käyttää väärin. Tiedoston loppumista ennen kuin
 tiettyä riviä voitiin lukea ei pidetä virheenä, ellei valitsinta \fB\-e\fR,
 \fB\-\-error\-on\-eof\fR käytetä.
+.SH HUOMIOT
+Jos luettava tiedosto ei tue kelaamista (kuten esimerkiksi jos sitä luetaan
+putkesta standardisyötteen kautta), alue voi yrittää näyttää vain rivejä, jotka
+sijaitsevat tiedostossa myöhemmin kuin mikään siihen asti näytetty rivi; jos
+alue yrittää toistaa aiemmin näytetyn rivin tai näyttää rivin, joka edeltää
+jotain jo näytetyistä riveistä, ohjelman suoritus päättyy virheeseen.
 .SH ESIMERKKI
 .TP
 lrg -f 10 *.c

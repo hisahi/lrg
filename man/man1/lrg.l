@@ -29,10 +29,12 @@ will be displayed. If M is omitted, all lines of the file starting from line N
 will be displayed.
 .IP \fBN~[M]\fP
 A line number and the vicinity thereof. M specifies the number of lines to
-display before and after line N; it can be omitted in which case it is assumed
+display before and after line N; it may be omitted in which case it is assumed
 to be 3. In total, at most 2M+1 lines will be displayed. M may also be set to
 zero, in which case this is equivalent to simply displaying line N.
 .RE
+
+Multiple ranges, separated by commas, can be specified.
 
 If
 .B lrg
@@ -75,6 +77,11 @@ In POSIX-compatible environments, the command will return 0 when successful,
 1 if an error occurs and 2 if there was incorrect usage. A premature end-of-file
 condition is not considered an error (unless the option \fB\-e\fR,
 \fB\-\-error\-on\-eof\fR is given).
+.SH NOTES
+If a file is not seekable (such as when reading from standard input through
+a pipe), a range may only attempt to display lines that come after every other
+line displayed up to that point; repeating the same line or displaying a line
+that precedes any thus far displayed line will result in an error.
 .SH EXAMPLE
 .TP
 lrg -f 10 *.c
