@@ -127,6 +127,13 @@ typedef unsigned long linenum_t;
 #define _CRT_SECURE_NO_WARNINGS 1
 #endif
 
+/* memory allocation functions. assumed to have the same signature and return
+   value behavior as standard C malloc, realloc, free. these don't need to
+   be macros */
+#define lrg_malloc malloc
+#define lrg_realloc realloc
+#define lrg_free free
+
 /* ========================================================= */
 /*                        definitions                        */
 /* ========================================================= */
@@ -148,7 +155,8 @@ size_t linesbuf_c = sizeof(linesbuf_static) / sizeof(linesbuf_static[0]);
 
 static const char *STDIN_FILE = "-";
 const char *myname;
-int show_linenums = 0, show_files = 0, warn_noline = 0;
+int show_linenums = 0, show_files = 0, warn_noline = 0, error_on_eof = 0;
+int got_eof = 0;
 
 /* ========================================================= */
 /*                       support code                        */
@@ -180,7 +188,7 @@ void lrg_lps_sleep(void) { nanosleep(&posixnsreq, NULL); }
 /* ========================================================= */
 /* in a centralized location to help with localization */
 
-void lrg_printhelp(void) {
+void lrg_printversion(void) {
     fprintf(stderr, "lrg by Sampo Hippeläinen (hisahi) - version " __DATE__ "\n"
 #if LRG_POSIX
                     "POSIX version\n"
@@ -188,6 +196,10 @@ void lrg_printhelp(void) {
                     "ANSI C version\n"
 #endif
     );
+}
+
+void lrg_printhelp(void) {
+    lrg_printversion();
     fprintf(stderr,
             "Usage: %s [OPTION]... range[,range]... "
             "[input-file]...\n"
@@ -198,8 +210,12 @@ void lrg_printhelp(void) {
             "Line numbers start at 1.\n\n",
             myname);
     fprintf(stderr,
-            "  -h, --help\n"
+            "  -?, --help\n"
             "                 prints this message\n"
+            "  --version\n"
+            "                 prints version information\n"
+            "  -e, --error-on-eof\n"
+            "                 treat premature EOF as an error\n"
             "  -f, --file-names\n"
             "                 print file names before each file\n"
             "  -l, --line-numbers\n"
@@ -403,7 +419,7 @@ int lrg_next_linerange(char **RESTRICT ptr, linenum_t *RESTRICT start,
     return 0;
 }
 
-void lrg_free_linebuf(void) { free(linesbuf); }
+void lrg_free_linebuf(void) { lrg_free(linesbuf); }
 
 #if CHAR_BIT != 8 || !defined(LRG_MEMCNT_WORD) || !defined(UINTPTR_MAX)
 /* unsupported */
@@ -411,11 +427,12 @@ void lrg_free_linebuf(void) { free(linesbuf); }
 #define LRG_TRY_FAST_MEMCNT 0
 #endif
 
-#if LRG_TRY_FAST_MEMCNT && defined(UINT64_MAX)
+#if LRG_TRY_FAST_MEMCNT && defined(UINT64_MAX) && UINTPTR_MAX != UINT32_MAX && \
+    !LRG_NO_UINT64
 typedef uint64_t memcnt_word_t;
 #define LRG_MEMCNT_WORD 64
 #define LRG_MEMCNT_COUNT 8
-#elif LRG_TRY_FAST_MEMCNT && defined(UINT32_MAX)
+#elif LRG_TRY_FAST_MEMCNT && defined(UINT32_MAX) && !LRG_NO_UINT32
 typedef uint32_t memcnt_word_t;
 #define LRG_MEMCNT_WORD 32
 #define LRG_MEMCNT_COUNT 4
@@ -424,13 +441,11 @@ typedef uint32_t memcnt_word_t;
 #define LRG_TRY_FAST_MEMCNT 0
 #endif
 
-/* must have fast popcount! */
-#define LRG_SLOW_POPCOUNT 1
 #if LRG_TRY_FAST_MEMCNT
 #if __GNUC__
 #define popcount32 __builtin_popcount
 #define popcount64 __builtin_popcountl
-#elif LRG_SLOW_POPCOUNT
+#else
 int popcount32(uint32_t v) {
     int c = 0;
     for (; v; ++c)
@@ -443,8 +458,6 @@ int popcount64(uint64_t v) {
         v &= v - 1;
     return c;
 }
-#else
-#define LRG_TRY_FAST_MEMCNT 0
 #endif
 #endif
 
@@ -484,13 +497,6 @@ size_t memcnt(const void *ptr, int value, size_t num) {
     return c;
 }
 
-#define SWAP(T, x, y)                                                          \
-    do {                                                                       \
-        T tmp = x;                                                             \
-        x = y;                                                                 \
-        y = tmp;                                                               \
-    } while (0)
-
 int lrg_parse_lines(char *ln) {
     char *oldptr = ln;
     int pl = 0;
@@ -502,13 +508,15 @@ int lrg_parse_lines(char *ln) {
             return 1;
         }
 
-        if (l1 < l0)
-            SWAP(linenum_t, l0, l1);
+        if (l0 > l1) {
+            oldptr = ln;
+            continue;
+        }
 
         if (linesbuf_n == linesbuf_c) {
             if (linesbuf == linesbuf_static) {
-                linesbuf =
-                    malloc(sizeof(struct lrg_linerange) * (linesbuf_c *= 2));
+                linesbuf = lrg_malloc(sizeof(struct lrg_linerange) *
+                                      (linesbuf_c *= 2));
                 if (!linesbuf) {
                     lrg_alloc_fail();
                     return 1;
@@ -518,7 +526,7 @@ int lrg_parse_lines(char *ln) {
                 atexit(&lrg_free_linebuf);
 
             } else {
-                struct lrg_linerange *newptr = realloc(
+                struct lrg_linerange *newptr = lrg_realloc(
                     linesbuf, sizeof(struct lrg_linerange) * (linesbuf_c *= 2));
                 if (!newptr) {
                     lrg_alloc_fail();
@@ -547,10 +555,11 @@ int lrg_parse_lines(char *ln) {
     } while (0);
 
 INLINE int lrg_processfile(const char *fn, FILE *f) {
-    int read_n, had_eol, can_seek = !fseek(f, 0, SEEK_SET), show_this_linenum;
+    int read_n, had_eol, can_seek = !fseek(f, 0, SEEK_SET),
+                         show_this_linenum = show_linenums;
     char *buf_prev, *buf_next, *buf_end = NULL, *next_eol;
     struct lrg_linerange range;
-    linenum_t linenum;
+    linenum_t linenum, eof_at = LINENUM_MAX;
     size_t range_i;
 
 #ifdef GET_FILE_FD
@@ -583,7 +592,15 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
 
     for (range_i = 0; range_i < linesbuf_n; ++range_i) {
         range = linesbuf[range_i];
-        show_this_linenum = show_linenums;
+
+        if (UNLIKELY(range.first > eof_at)) {
+            /* we already know this won't work */
+            if (warn_noline)
+                lrg_eof_before(fn, range.first, eof_at);
+            if (error_on_eof)
+                return 0;
+            continue;
+        }
 
         /* do we need to go back? */
         if (UNLIKELY(range.first < linenum)) {
@@ -663,9 +680,9 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
                 if (lrg_lps_enable)
                     lrg_lps_sleep();
 #endif
+                show_this_linenum = show_linenums; /* maybe show again */
                 if (linenum++ == range.last)
                     break;
-                show_this_linenum = show_linenums; /* maybe show again */
             }
         }
         /* linenum is one past range.last here if all went well */
@@ -678,11 +695,15 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
         }
         if (UNLIKELY(read_n == 0 && range.last != LINENUM_MAX)) {
             /* reached the end of the file before first or last line */
+            eof_at = linenum;
             if (warn_noline)
                 lrg_eof_before(
                     fn, linenum >= range.first ? range.last : range.first,
-                    linenum);
-            return 0;
+                    eof_at);
+            got_eof = 1;
+            if (error_on_eof)
+                return 0;
+            read_n = buf_end - tmpbuf;
         }
     }
     return 0;
@@ -713,7 +734,7 @@ int lrg_nextfile(const char *fn) {
     return returncode;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char *argv[]) {
     int flag_ok = 1, i, fend = 0, inputLines = 0;
     myname = argv[0];
     setlocale(LC_NUMERIC, "C");
@@ -733,6 +754,8 @@ int main(int argc, char **argv) {
                     show_files = 1;
                 } else if (!strcmp(rest, "warn-eof")) {
                     warn_noline = 1;
+                } else if (!strcmp(rest, "error-on-eof")) {
+                    error_on_eof = 1;
                 } else if (!strcmp(rest, "lps") ||
                            !strcmp(rest, "lines-per-second")) {
 #if LRG_SUPPORT_LPS
@@ -751,6 +774,9 @@ int main(int argc, char **argv) {
                 } else if (!strcmp(rest, "help")) {
                     lrg_printhelp();
                     return EXITCODE_OK;
+                } else if (!strcmp(rest, "version")) {
+                    lrg_printversion();
+                    return EXITCODE_OK;
                 } else {
                     lrg_error_option_s(OPT_ERR_INVAL, rest);
                     return EXITCODE_USE;
@@ -761,11 +787,13 @@ int main(int argc, char **argv) {
                     c = *cp++;
                     if (c == 'l') {
                         show_linenums = 1;
+                    } else if (c == 'e') {
+                        error_on_eof = 1;
                     } else if (c == 'f') {
                         show_files = 1;
                     } else if (c == 'w') {
                         warn_noline = 1;
-                    } else if (c == 'h' || c == '?') {
+                    } else if (c == '?') {
                         lrg_printhelp();
                         return EXITCODE_OK;
                     } else {
@@ -797,6 +825,9 @@ int main(int argc, char **argv) {
                 return EXITCODE_ERR;
         }
     }
+
+    if (error_on_eof && got_eof)
+        return EXITCODE_ERR;
 
     return EXITCODE_OK;
 }

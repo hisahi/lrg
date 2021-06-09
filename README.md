@@ -21,8 +21,12 @@ Note that 'rewinding' might be impossible - once a line has been printed,
 it is possible that only lines after it can be printed.
 Line numbers start at 1.
 
-  -h, --help
+  -?, --help
                  prints this message
+  --version
+                 prints version information
+  -e, --error-on-eof
+                 treat premature EOF as an error
   -f, --file-names
                  print file names before each file
   -l, --line-numbers
