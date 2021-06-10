@@ -3,26 +3,20 @@
 Line RanGe (LRG)
 A tool that allows displaying specific lines of files (or around a
 specific line) with possible line number display
-
 Copyright (c) 2017-2021 Sampo Hippeläinen (hisahi)
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 */
 
@@ -72,6 +66,13 @@ SOFTWARE.
 #define LRG_TRY_FAST_MEMCNT 1
 #endif
 
+/* use memcnt to skip lines if we still have a long way to go. this is not
+   worth it unless memcnt is really fast (such as when it's vectorized and
+   uses CPU intrinsics), at least about as fast as the memchr of your libc */
+#ifndef LRG_HAVE_TURBO_MEMCNT
+#define LRG_HAVE_TURBO_MEMCNT 0
+#endif
+
 /* 0 = always use fillbuf_file. 1 = always use fillbuf_pipe.
    2 (or anything else) = auto (use _file if seekable, else _pipe).
    consider setting to 0 or 1 if branches are expensive (even if predictable)
@@ -82,23 +83,31 @@ SOFTWARE.
 #define LRG_FILLBUF_MODE 2
 #endif
 
-/* buffer size */
+/* buffer size. adjusting this can improve performance considerably and is
+   a good place to start if you want lrg to run faster on your system */
+#ifndef LRG_BUFSIZE
 #define LRG_BUFSIZE BUFSIZ * 4
+#endif
 /* line range buffer size. this is only the static allocation;
    if there are too many ranges to fit, dynamic allocation will be used to
    get an expanded buffer */
+#ifndef LRG_LINEBUFSIZE
 #define LRG_LINEBUFSIZE 32
+#endif
 
 #if LRG_C99
 typedef unsigned long long linenum_t;
 #define LINENUM_MAX ULLONG_MAX
 #define LINENUM_FMT "llu"
+#define STR_TO_LINENUM strtoull
 #else
 typedef unsigned long linenum_t;
 #define LINENUM_MAX ULONG_MAX
 #define LINENUM_FMT "lu"
+#define STR_TO_LINENUM strtoul
 #endif
 
+/* exit codes. successful, I/O error, usage error */
 #if LRG_POSIX
 #define EXITCODE_OK 0
 #define EXITCODE_ERR 1
@@ -110,6 +119,7 @@ typedef unsigned long linenum_t;
 #endif
 
 #if (__STDC_VERSION__ >= 199901L)
+/* inline this func, please */
 #define INLINE static inline
 #define RESTRICT restrict
 #else
@@ -133,7 +143,7 @@ typedef unsigned long linenum_t;
 
 /* memory allocation functions. assumed to have the same signature and return
    value behavior as standard C malloc, realloc, free. these don't need to
-   be macros */
+   be macros, they just are for now to allow easier customization */
 #define lrg_malloc malloc
 #define lrg_realloc realloc
 #define lrg_free free
@@ -157,9 +167,11 @@ size_t linesbuf_n = 0;
 /* capacity. if we run past, we need to reallocate the line range buffer */
 size_t linesbuf_c = sizeof(linesbuf_static) / sizeof(linesbuf_static[0]);
 
-static const char *STDIN_FILE = "-";
+/* argv[0] */
 const char *myname;
+/* the flags that the user gave */
 int show_linenums = 0, show_files = 0, warn_noline = 0, error_on_eof = 0;
+/* any of our files got EOF? */
 int got_eof = 0;
 
 /* ========================================================= */
@@ -174,13 +186,13 @@ char lrg_lps_enable = 0;
 struct timespec posixnsreq;
 
 void lrg_lps_init(float lps) {
-    /* sleep for 1/lps seconds */
+    /* set up a timespec to sleep for 1/lps seconds */
     posixnsreq.tv_sec = (long)(1. / lps);
     posixnsreq.tv_nsec = (long)(NS_PER_SEC / lps) % NS_PER_SEC;
     lrg_lps_enable = 1;
 }
 
-void lrg_lps_sleep(void) { nanosleep(&posixnsreq, NULL); }
+INLINE void lrg_lps_sleep(void) { nanosleep(&posixnsreq, NULL); }
 
 /* we support the --lines-per-second flag */
 #define LRG_SUPPORT_LPS 1
@@ -192,6 +204,10 @@ void lrg_lps_sleep(void) { nanosleep(&posixnsreq, NULL); }
 /* ========================================================= */
 /* in a centralized location to help with localization */
 
+/* the string that means "stdin" when given as a file name through the
+   command line. - is the convention for *nix systems */
+static const char *STDIN_FILE = "-";
+
 void lrg_printversion(void) {
     fprintf(stdout, "lrg by Sampo Hippeläinen (hisahi) - version " __DATE__ "\n"
 #if LRG_POSIX
@@ -200,12 +216,15 @@ void lrg_printversion(void) {
                     "ANSI C version\n"
 #endif
     );
+    fprintf(stdout, "Copyright (c) 2017-2021 Sampo Hippeläinen (hisahi)\n"
+                    "This program is free software and comes with ABSOLUTELY "
+                    "NO WARRANTY.\n");
 }
 
 void lrg_printhelp(void) {
     lrg_printversion();
     fprintf(stdout,
-            "Usage: %s [OPTION]... range[,range]... "
+            "\nUsage: %s [OPTION]... range[,range]... "
             "[input-file]...\n"
             "Prints a specific range of lines from the given file.\n"
             "Note that 'rewinding' might be impossible - once a line "
@@ -246,14 +265,19 @@ void lrg_printhelp(void) {
             "                 if M not specified, defaults to 3\n\n");
 }
 
+/* how stdin is shown in error messages, etc. */
 #define STDIN_FILENAME_APPEARANCE "(stdin)"
+/* for -f/--file-names */
 #define FILE_DISPLAY_FMT "%s\n"
+/* for -l/--line-numbers */
 #define LINE_DISPLAY_FMT " %7" LINENUM_FMT "   "
 
+/* used in error messages */
 #define OPER_SEEK "seeking"
 #define OPER_OPEN "opening"
 #define OPER_READ "reading"
 
+/* error messages */
 #define OPT_ERR_INVAL "invalid option"
 #define OPT_ERR_UNSUP "option not supported on this build"
 #define OPT_ERR_PARAM "invalid or missing parameter"
@@ -267,6 +291,7 @@ INLINE void lrg_showusage(void) {
 }
 
 INLINE void lrg_perror(const char *fn, const char *open) {
+    /* open = OPER_SEEK, OPER_OPEN or OPER_READ */
     fprintf(stderr, "%s: error %s %s: %s\n", myname, open, fn, strerror(errno));
 }
 
@@ -324,7 +349,7 @@ INLINE int lrg_fillbuf_file(char *buffer, size_t bufsize, int fd) {
 }
 
 #define lrg_fillbuf_pipe lrg_fillbuf_file
-/* since pipe/file impls are the same, just always use one of them */
+/* since pipe/file impls are the same, just use one of them */
 #undef LRG_FILLBUF_MODE
 #define LRG_FILLBUF_MODE 0
 
@@ -375,8 +400,8 @@ int lrg_read_linenum(char *str, char **endptr, linenum_t *out,
     if (*str == '-')
         result = 0, *endptr = str;
     else {
-        result = strtoul(str, (char **)endptr, 10);
-        if (result == ULONG_MAX && errno == ERANGE)
+        result = STR_TO_LINENUM(str, (char **)endptr, 10);
+        if (result == LINENUM_MAX && errno == ERANGE)
             return -1;
     }
     if (!result && (!allow_zero || str == *endptr))
@@ -408,6 +433,8 @@ int lrg_next_linerange(char **RESTRICT ptr, linenum_t *RESTRICT start,
         if (lrg_read_linenum(endptr + 1, &endptr, &linec, 3, 1) < 0)
             return -1;
         *start = line0 > linec ? line0 - linec : 1;
+        if (line0 + linec < line0) /* overflow protection */
+            return -1;
         *end = line0 + linec;
 
     } else {
@@ -471,6 +498,7 @@ size_t memcnt(const void *ptr, int value, size_t num) {
     const char *p = ptr;
 #if LRG_TRY_FAST_MEMCNT
     if (num > LRG_MEMCNT_WORD * 4) {
+        /* mask = bytes with only their lowest bit set in word */
 #if LRG_MEMCNT_WORD == 32
         const memcnt_word_t mask = 0x01010101ULL;
 #define POPCOUNT popcount32
@@ -478,21 +506,30 @@ size_t memcnt(const void *ptr, int value, size_t num) {
         const memcnt_word_t mask = 0x0101010101010101ULL;
 #define POPCOUNT popcount64
 #endif
+        /* with * mask, we "broadcast" the byte all over the word */
         memcnt_word_t cmp = (memcnt_word_t)(value * mask), tmp;
         const memcnt_word_t *wp;
+        /* handle unaligned ptr */
         while ((uintptr_t)p & (LRG_MEMCNT_COUNT - 1))
             --num, c += *p++ == value;
         wp = (const memcnt_word_t *)p;
         while (num >= LRG_MEMCNT_COUNT) {
             num -= LRG_MEMCNT_COUNT;
+            /* XOR with cmp - now bytes equal to value are 00s */
             tmp = *wp++ ^ cmp;
             /* count zero bytes in word tmp and add to c */
+            /* shifts make sure the low bits in each byte are set if any
+               of the bits in the byte were set */
             tmp |= tmp >> 4;
             tmp |= tmp >> 2;
             tmp |= tmp >> 1;
+            /* masks out anything else but the lowest bits in each byte */
             tmp &= mask;
+            /* popcount will then give us the number of bytes that weren't 00.
+               subtract from the number of bytes in the word to inverse */
             c += LRG_MEMCNT_COUNT - POPCOUNT(tmp);
         }
+        /* assign pointer back to handle unaligned again */
         p = (const char *)wp;
     }
 #endif
@@ -518,6 +555,7 @@ int lrg_parse_lines(char *ln) {
         }
 
         if (linesbuf_n == linesbuf_c) {
+            /* don't try to call realloc on the static buffer! */
             if (linesbuf == linesbuf_static) {
                 linesbuf = lrg_malloc(sizeof(struct lrg_linerange) *
                                       (linesbuf_c *= 2));
@@ -653,10 +691,23 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
         for (;;) {
             /* have to read more? */
             if (buf_next == buf_end) {
-                read_n = READ_BUFFER(tmpbuf, sizeof(tmpbuf));
-                if (read_n <= 0)
-                    goto read_error;
-                buf_next = tmpbuf, buf_end = tmpbuf + read_n;
+                do {
+                    read_n = READ_BUFFER(tmpbuf, sizeof(tmpbuf));
+                    if (read_n <= 0)
+                        goto read_error;
+#if LRG_HAVE_TURBO_MEMCNT
+                    if (linenum < range.first &&
+                        range.first - linenum > read_n) {
+                        /* still a long way to go. if we are still 2000 lines
+                        away and the buffer has 1000 bytes, obviously this data
+                        will not have the line we're looking for. thus, we'll
+                        just count the number of newlines and try again */
+                        linenum += memcnt(tmpbuf, '\n', read_n);
+                        continue;
+                    }
+#endif
+                    buf_next = tmpbuf, buf_end = tmpbuf + read_n;
+                } while (0);
             }
 
             buf_prev = buf_next;
