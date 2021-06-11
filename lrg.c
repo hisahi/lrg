@@ -28,19 +28,19 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L && !LRG_NO_C99
+#define LRG_C99 1
+#include <stdint.h>
+#else
+#define LRG_C99 0
+#endif
+
 #if _POSIX_C_SOURCE >= 199309L && !LRG_NO_POSIX
 #define LRG_POSIX 1
 #include <time.h>
 #include <unistd.h>
 #else
 #define LRG_POSIX 0
-#endif
-
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L && !LRG_NO_C99
-#define LRG_C99 1
-#include <stdint.h>
-#else
-#define LRG_C99 0
 #endif
 
 /* ========================================================= */
@@ -118,7 +118,7 @@ typedef unsigned long linenum_t;
 #define EXITCODE_USE EXIT_FAILURE
 #endif
 
-#if (__STDC_VERSION__ >= 199901L)
+#if LRG_C99
 /* inline this func, please */
 #define INLINE static inline
 #define RESTRICT restrict
@@ -175,7 +175,7 @@ int show_linenums = 0, show_files = 0, warn_noline = 0, error_on_eof = 0;
 int got_eof = 0;
 
 /* ========================================================= */
-/*                       support code                        */
+/*                        support code                       */
 /* ========================================================= */
 
 #if LRG_POSIX
@@ -693,15 +693,16 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
             if (buf_next == buf_end) {
                 do {
                     read_n = READ_BUFFER(tmpbuf, sizeof(tmpbuf));
-                    if (read_n <= 0)
+                    if (UNLIKELY(read_n <= 0))
                         goto read_error;
 #if LRG_HAVE_TURBO_MEMCNT
                     if (linenum < range.first &&
                         range.first - linenum > read_n) {
                         /* still a long way to go. if we are still 2000 lines
-                        away and the buffer has 1000 bytes, obviously this data
-                        will not have the line we're looking for. thus, we'll
-                        just count the number of newlines and try again */
+                           away and the buffer has 1000 bytes, obviously this
+                           data will not have the line we're looking for. thus,
+                           we'll just count the number of newlines and fill
+                           the buffer with new data */
                         linenum += memcnt(tmpbuf, '\n', read_n);
                         continue;
                     }
