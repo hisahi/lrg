@@ -56,7 +56,8 @@ Extra (POSIX-exclusive) feature:
 # Building
 
 lrg is distributed as a single standalone .c file that can be compiled
-with any ANSI C (C89) standard-compliant C compiler.
+with the vast majority of ANSI C (C89) standard-compliant C compilers, basically
+any compiler with a reasonable length limit (at least ~20-ish) for identifiers.
 
 While the base program is fully functional on ANSI C, on modern versions
 of POSIX, an enhanced and optimized version can be compiled instead (and
@@ -101,6 +102,11 @@ program. All defines are either 0 or 1, unless otherwise mentioned:
   and 1 the use of pipe reading functions. On modern platforms with branch
   prediction, there should not really be any reason for this to not be 2, unless
   the file and pipe reading functions are identical.
+
+# Performance
+
+Not only is lrg more intuitive to use than many existing tricks for getting line
+number N in Linux, it is also plenty fast too! See `BENCHMARK.md`.
 
 # Contributing
 
