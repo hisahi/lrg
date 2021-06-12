@@ -35,6 +35,6 @@ Test software: GNU coreutils 8.30, GNU Awk 5.0.1, GNU sed 4.7
 
 Test compiler: clang 10.0.0-4ubuntu1
 
-Test version: lrg, commit `94c74d7cb07552663900a29a599c75beddadf0e3`
+Test version: lrg, [commit 94c74d7cb07552663900a29a599c75beddadf0e3](https://github.com/hisahi/lrg/tree/94c74d7cb07552663900a29a599c75beddadf0e3)
 
 For lrg `-O3`, the preprocessor define `-DLRG_TRY_FAST_MEMCNT=0` was used.
