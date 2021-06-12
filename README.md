@@ -99,7 +99,8 @@ program. All defines are either 0 or 1, unless otherwise mentioned:
   will use separate functions for reading from files and pipes (distinguished
   by whether a stream is seekable). 0 forces the use of file reading functions
   and 1 the use of pipe reading functions. On modern platforms with branch
-  prediction, there should not really be any reason for this to not be 2.
+  prediction, there should not really be any reason for this to not be 2, unless
+  the file and pipe reading functions are identical.
 
 # Contributing
 

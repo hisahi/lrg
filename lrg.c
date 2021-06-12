@@ -659,15 +659,8 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
                 /* scan backwards until we reach the correct previous line.
                    can_seek assumed to be true and range.first > 1 */
                 while (linenum >= range.first) {
-                    if (FILE_SEEK_CUR(-(long)(read_n + sizeof(tmpbuf)))) {
-                        if (FILE_SEEK_SET(0)) {
-                            lrg_perror(fn, OPER_SEEK);
-                            lrg_no_rewind(fn, range.text);
-                            return 1;
-                        }
-                        JUMP_LINE(1);
-                        goto backward_jumped;
-                    }
+                    if (FILE_SEEK_CUR(-(long)(read_n + sizeof(tmpbuf))))
+                        goto jump_backwards;
                     read_n = READ_BUFFER(tmpbuf, sizeof(tmpbuf));
                     if (read_n < sizeof(tmpbuf))
                         goto read_error;
@@ -675,8 +668,8 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
                 }
                 /* no jump. the buffer is already full of what we need */
                 buf_next = tmpbuf, buf_end = tmpbuf + read_n;
-            backward_jumped:;
             } else
+            jump_backwards: /* goto abuse. this is somehow allowed! */
 #endif
             {
                 if (FILE_SEEK_SET(0)) {
