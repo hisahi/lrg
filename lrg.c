@@ -28,17 +28,32 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L && !LRG_NO_C99
+#if !LRG_NO_C99 && defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
 #define LRG_C99 1
 #include <stdint.h>
 #else
 #define LRG_C99 0
 #endif
 
-#if _POSIX_C_SOURCE >= 199309L && !LRG_NO_POSIX
+#if defined(__has_include) && !defined(HAVE_UNISTD_H)
+#if __has_include(<unistd.h>)
+#define HAVE_UNISTD_H 1
+#endif
+#endif
+
+#if !LRG_NO_POSIX &&                                                           \
+    (HAVE_UNISTD_H || defined(__unix__) || defined(__unix) ||                  \
+     defined(__QNX__) || (defined(__APPLE__) && defined(__MACH__)))
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 199309L
+#endif
+#include <unistd.h>
+#endif
+
+#if !LRG_NO_POSIX && defined(_POSIX_C_SOURCE) && defined(_POSIX_VERSION) &&    \
+    _POSIX_VERSION >= _POSIX_C_SOURCE
 #define LRG_POSIX 1
 #include <time.h>
-#include <unistd.h>
 #else
 #define LRG_POSIX 0
 #endif
@@ -84,9 +99,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #endif
 
 /* buffer size. adjusting this can improve performance considerably and is
-   a good place to start if you want lrg to run faster on your system */
+   a good place to start if you wish to build a fast lrg for your system */
 #ifndef LRG_BUFSIZE
+#if LRG_POSIX
 #define LRG_BUFSIZE BUFSIZ * 4
+#else
+#define LRG_BUFSIZE BUFSIZ
+#endif
 #endif
 /* line range buffer size. this is only the static allocation;
    if there are too many ranges to fit, dynamic allocation will be used to
@@ -123,7 +142,7 @@ typedef unsigned long linenum_t;
 #define INLINE static inline
 #define RESTRICT restrict
 #else
-#define INLINE
+#define INLINE static
 #define RESTRICT
 #endif
 
@@ -159,20 +178,20 @@ struct lrg_linerange {
     const char *text;
 };
 
-char tmpbuf[LRG_BUFSIZE];
-struct lrg_linerange linesbuf_static[LRG_LINEBUFSIZE];
-struct lrg_linerange *linesbuf = linesbuf_static;
+static char tmpbuf[LRG_BUFSIZE];
+static struct lrg_linerange linesbuf_static[LRG_LINEBUFSIZE];
+static struct lrg_linerange *linesbuf = linesbuf_static;
 /* number of line ranges */
-size_t linesbuf_n = 0;
+static size_t linesbuf_n = 0;
 /* capacity. if we run past, we need to reallocate the line range buffer */
-size_t linesbuf_c = sizeof(linesbuf_static) / sizeof(linesbuf_static[0]);
+static size_t linesbuf_c = sizeof(linesbuf_static) / sizeof(linesbuf_static[0]);
 
 /* argv[0] */
-const char *myname;
+static const char *myname;
 /* the flags that the user gave */
-int show_linenums = 0, show_files = 0, warn_noline = 0, error_on_eof = 0;
+static int show_linenums = 0, show_files = 0, warn_noline = 0, error_on_eof = 0;
 /* any of our files got EOF? */
-int got_eof = 0;
+static int got_eof = 0;
 
 /* ========================================================= */
 /*                        support code                       */
@@ -182,10 +201,10 @@ int got_eof = 0;
 
 #define NS_PER_SEC 1000000000L
 
-char lrg_lps_enable = 0;
-struct timespec posixnsreq;
+static char lrg_lps_enable = 0;
+static struct timespec posixnsreq;
 
-void lrg_lps_init(float lps) {
+static void lrg_lps_init(float lps) {
     /* set up a timespec to sleep for 1/lps seconds */
     posixnsreq.tv_sec = (long)(1. / lps);
     posixnsreq.tv_nsec = (long)(NS_PER_SEC / lps) % NS_PER_SEC;
@@ -208,7 +227,7 @@ INLINE void lrg_lps_sleep(void) { nanosleep(&posixnsreq, NULL); }
    command line. - is the convention for *nix systems */
 static const char *STDIN_FILE = "-";
 
-void lrg_printversion(void) {
+static void lrg_printversion(void) {
     fprintf(stdout, "lrg by Sampo Hippeläinen (hisahi) - version " __DATE__ "\n"
 #if LRG_POSIX
                     "POSIX version\n"
@@ -221,7 +240,7 @@ void lrg_printversion(void) {
                     "NO WARRANTY.\n");
 }
 
-void lrg_printhelp(void) {
+static void lrg_printhelp(void) {
     lrg_printversion();
     fprintf(stdout,
             "\nUsage: %s [OPTION]... range[,range]... "
@@ -375,7 +394,7 @@ INLINE int lrg_fillbuf_file(char *buffer, size_t bufsize, FILE *file) {
 INLINE int lrg_fillbuf_pipe(char *buffer, size_t bufsize, FILE *file) {
     char *p = buffer;
     int c;
-    while (LIKELY(bufsize--)) {
+    while (bufsize--) {
         c = getc(file);
         if (UNLIKELY(c == EOF)) {
             if (ferror(file))
@@ -392,8 +411,8 @@ INLINE int lrg_fillbuf_pipe(char *buffer, size_t bufsize, FILE *file) {
 
 #endif
 
-int lrg_read_linenum(char *str, char **endptr, linenum_t *out,
-                     linenum_t fallback, char allow_zero) {
+static int lrg_read_linenum(char *str, char **endptr, linenum_t *out,
+                            linenum_t fallback, char allow_zero) {
     linenum_t result;
     while (isspace(*str))
         ++str;
@@ -411,8 +430,8 @@ int lrg_read_linenum(char *str, char **endptr, linenum_t *out,
 }
 
 /* 0 = ok, < 0 = fail, > 0 = end */
-int lrg_next_linerange(char **RESTRICT ptr, linenum_t *RESTRICT start,
-                       linenum_t *RESTRICT end) {
+static int lrg_next_linerange(char **RESTRICT ptr, linenum_t *RESTRICT start,
+                              linenum_t *RESTRICT end) {
     char *str = *ptr, *endptr;
     linenum_t line0;
 
@@ -450,7 +469,7 @@ int lrg_next_linerange(char **RESTRICT ptr, linenum_t *RESTRICT start,
     return 0;
 }
 
-void lrg_free_linebuf(void) { lrg_free(linesbuf); }
+static void lrg_free_linebuf(void) { lrg_free(linesbuf); }
 
 #if CHAR_BIT != 8 || !defined(LRG_MEMCNT_WORD) || !defined(UINTPTR_MAX)
 /* unsupported */
@@ -458,12 +477,12 @@ void lrg_free_linebuf(void) { lrg_free(linesbuf); }
 #define LRG_TRY_FAST_MEMCNT 0
 #endif
 
-#if LRG_TRY_FAST_MEMCNT && defined(UINT64_MAX) && UINTPTR_MAX != UINT32_MAX && \
-    !LRG_NO_UINT64
+#if !LRG_NO_UINT64 && LRG_TRY_FAST_MEMCNT && defined(UINT64_MAX) &&            \
+    UINTPTR_MAX > UINT32_MAX
 typedef uint64_t memcnt_word_t;
 #define LRG_MEMCNT_WORD 64
 #define LRG_MEMCNT_COUNT 8
-#elif LRG_TRY_FAST_MEMCNT && defined(UINT32_MAX) && !LRG_NO_UINT32
+#elif !LRG_NO_UINT32 && LRG_TRY_FAST_MEMCNT && defined(UINT32_MAX)
 typedef uint32_t memcnt_word_t;
 #define LRG_MEMCNT_WORD 32
 #define LRG_MEMCNT_COUNT 4
@@ -477,13 +496,13 @@ typedef uint32_t memcnt_word_t;
 #define popcount32 __builtin_popcount
 #define popcount64 __builtin_popcountl
 #else
-int popcount32(uint32_t v) {
+INLINE int popcount32(uint32_t v) {
     int c = 0;
     for (; v; ++c)
         v &= v - 1;
     return c;
 }
-int popcount64(uint64_t v) {
+INLINE int popcount64(uint64_t v) {
     int c = 0;
     for (; v; ++c)
         v &= v - 1;
@@ -538,7 +557,7 @@ size_t memcnt(const void *ptr, int value, size_t num) {
     return c;
 }
 
-int lrg_parse_lines(char *ln) {
+static int lrg_parse_lines(char *ln) {
     char *oldptr = ln;
     int pl = 0;
     linenum_t l0 = 0, l1 = 0;
@@ -599,7 +618,7 @@ int lrg_parse_lines(char *ln) {
 INLINE int lrg_processfile(const char *fn, FILE *f) {
     int read_n, had_eol, can_seek = !fseek(f, 0, SEEK_SET),
                          show_this_linenum = show_linenums;
-    char *buf_prev, *buf_next, *buf_end = NULL, *next_eol;
+    char *buf_prev, *buf_next, *buf_end = NULL;
     struct lrg_linerange range;
     linenum_t linenum, eof_at = LINENUM_MAX;
     size_t range_i;
@@ -705,13 +724,12 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
             }
 
             buf_prev = buf_next;
-            next_eol = memchr(buf_next, '\n', buf_end - buf_next);
-            had_eol = next_eol != NULL;
-            buf_next = had_eol ? next_eol + 1 : buf_end;
+            buf_next = memchr(buf_next, '\n', buf_end - buf_next);
+            had_eol = buf_next != NULL;
+            buf_next = had_eol ? buf_next + 1 : buf_end;
 
             if (linenum < range.first) {
-                if (LIKELY(had_eol))
-                    ++linenum;
+                linenum += had_eol;
                 continue;
             }
 
@@ -724,7 +742,7 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
                 return 1;
             }
 
-            if (LIKELY(had_eol)) {
+            if (had_eol) {
 #if LRG_SUPPORT_LPS
                 if (lrg_lps_enable)
                     lrg_lps_sleep();
@@ -758,7 +776,7 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
     return 0;
 }
 
-int lrg_nextfile(const char *fn) {
+static int lrg_nextfile(const char *fn) {
     FILE *f;
     int returncode;
 
