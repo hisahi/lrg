@@ -35,6 +35,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define LRG_C99 0
 #endif
 
+#if !LRG_NO_C11 && defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define LRG_C11 1
+#else
+#define LRG_C11 0
+#endif
+
 #if defined(__has_include) && !defined(HAVE_UNISTD_H)
 #if __has_include(<unistd.h>)
 #define HAVE_UNISTD_H 1
@@ -58,6 +64,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define LRG_POSIX 0
 #endif
 
+#if (LRG_C99 && UINTPTR_MAX > UINT32_MAX) || defined(__x86_64__) ||            \
+    defined(_M_X64) || defined(__aarch64__)
+#define LRG_IS64BIT 1
+#else
+#define LRG_IS64BIT 0
+#endif
+
 /* ========================================================= */
 /*  preprocessor definitions (settings for compiled binary)  */
 /* ========================================================= */
@@ -74,18 +87,32 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define LRG_BACKWARD_SCAN_THRESHOLD 128
 #endif
 
-/* try to use fast memcnt on supported systems?
-   if your compiler does autovectorization, the "fast" memcnt may actually be
-   slower, in which case you should set this to 0 */
-#ifndef LRG_TRY_FAST_MEMCNT
-#define LRG_TRY_FAST_MEMCNT 1
+/* set to 1 if a memcnt implementation is linked from elsewhere */
+#ifndef LRG_HOSTED_MEMCNT
+#define LRG_HOSTED_MEMCNT 0
 #endif
+/* the linked implementation must have the below signature and return the number
+   of bytes (chars) equal to value in the buffer pointed to by ptr, the size of
+   which is determined by num. its behavior is undefined if accessing an array
+   beyond its bounds or if ptr is a null pointer. if not undefined, the
+   implementation shall return the same value as the following function with
+   the same parameters:
+   
+    size_t memcnt(const void *s, int c, size_t n) {
+        size_t i, count = 0;
+        const unsigned char *p = (const unsigned char *)s, v = (unsigned char)c;
+        for (i = 0; i < n; ++i)
+            if (p[i] == v)
+                ++count;
+        return count;
+    } */
+size_t memcnt(const void *s, int c, size_t n);
 
 /* use memcnt to skip lines if we still have a long way to go. this is not
    worth it unless memcnt is really fast (such as when it's vectorized and
    uses CPU intrinsics), at least about as fast as the memchr of your libc */
-#ifndef LRG_HAVE_TURBO_MEMCNT
-#define LRG_HAVE_TURBO_MEMCNT 0
+#ifndef LRG_FAST_MEMCNT
+#define LRG_FAST_MEMCNT LRG_HOSTED_MEMCNT
 #endif
 
 /* 0 = always use fillbuf_file. 1 = always use fillbuf_pipe.
@@ -112,6 +139,18 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
    get an expanded buffer */
 #ifndef LRG_LINEBUFSIZE
 #define LRG_LINEBUFSIZE 32
+#endif
+
+/* align buffer to N bytes. only actually happens if the compiler supports it */
+#ifndef LRG_BUFFER_ALIGN
+#if LRG_C99 && CHAR_BIT == 8 && LRG_IS64BIT
+#define LRG_BUFFER_ALIGN 8
+#elif LRG_C99 && CHAR_BIT == 8 && LRG_IS64BIT
+#define LRG_BUFFER_ALIGN 4
+#else
+/* 0 is ignored */
+#define LRG_BUFFER_ALIGN 0
+#endif
 #endif
 
 #if LRG_C99
@@ -146,6 +185,13 @@ typedef unsigned long linenum_t;
 #define RESTRICT
 #endif
 
+/* ALIGNAS: aligns buffer to N-byte boundary, or does nothing if N == 0 */
+#if LRG_C11
+#define ALIGNAS(N) _Alignas(N)
+#else
+#define ALIGNAS(N)
+#endif
+
 #ifdef __GNUC__
 #define LIKELY(x) __builtin_expect((x), 1)
 #define UNLIKELY(x) __builtin_expect((x), 0)
@@ -178,14 +224,6 @@ struct lrg_linerange {
     const char *text;
 };
 
-static char tmpbuf[LRG_BUFSIZE];
-static struct lrg_linerange linesbuf_static[LRG_LINEBUFSIZE];
-static struct lrg_linerange *linesbuf = linesbuf_static;
-/* number of line ranges */
-static size_t linesbuf_n = 0;
-/* capacity. if we run past, we need to reallocate the line range buffer */
-static size_t linesbuf_c = sizeof(linesbuf_static) / sizeof(linesbuf_static[0]);
-
 /* argv[0] */
 static const char *myname;
 /* the flags that the user gave */
@@ -201,17 +239,17 @@ static int got_eof = 0;
 
 #define NS_PER_SEC 1000000000L
 
-static char lrg_lps_enable = 0;
+static char lps_enable = 0;
 static struct timespec posixnsreq;
 
-static void lrg_lps_init(float lps) {
+static void lps_init(float lps) {
     /* set up a timespec to sleep for 1/lps seconds */
     posixnsreq.tv_sec = (long)(1. / lps);
     posixnsreq.tv_nsec = (long)(NS_PER_SEC / lps) % NS_PER_SEC;
-    lrg_lps_enable = 1;
+    lps_enable = 1;
 }
 
-INLINE void lrg_lps_sleep(void) { nanosleep(&posixnsreq, NULL); }
+INLINE void lps_sleep(void) { nanosleep(&posixnsreq, NULL); }
 
 /* we support the --lines-per-second flag */
 #define LRG_SUPPORT_LPS 1
@@ -314,11 +352,11 @@ INLINE void lrg_perror(const char *fn, const char *open) {
     fprintf(stderr, "%s: error %s %s: %s\n", myname, open, fn, strerror(errno));
 }
 
-INLINE void lrg_error_option_c(const char *err, char c) {
+INLINE void lrg_optc_error(const char *err, char c) {
     fprintf(stderr, "%s: %s -- '%c'\n" TRY_HELP, myname, err, c, myname);
 }
 
-INLINE void lrg_error_option_s(const char *err, const char *s) {
+INLINE void lrg_opts_error(const char *err, const char *s) {
     fprintf(stderr, "%s: %s -- '%s'\n" TRY_HELP, myname, err, s, myname);
 }
 
@@ -350,8 +388,31 @@ INLINE void lrg_alloc_fail(void) {
 }
 
 /* ========================================================= */
+/*                   memcnt implementation                   */
+/* ========================================================= */
+
+/* counts the number of bytes equal to value within a buffer */
+#if !LRG_HOSTED_MEMCNT
+size_t memcnt(const void *ptr, int value, size_t num) {
+    size_t c = 0;
+    const char *p = ptr;
+    while (num--)
+        c += *p++ == value;
+    return c;
+}
+#endif
+
+/* ========================================================= */
 /*                     main program code                     */
 /* ========================================================= */
+
+ALIGNAS(LRG_BUFFER_ALIGN) static char tmpbuf[LRG_BUFSIZE];
+static struct lrg_linerange st_linesbuf[LRG_LINEBUFSIZE];
+static struct lrg_linerange *linesbuf = st_linesbuf;
+/* number of line ranges */
+static size_t n_linesbuf = 0;
+/* capacity. if we run past, we need to reallocate the line range buffer */
+static size_t c_linesbuf = sizeof(st_linesbuf) / sizeof(st_linesbuf[0]);
 
 #if LRG_POSIX /* optimized POSIX implementation */
 
@@ -471,92 +532,6 @@ static int lrg_next_linerange(char **RESTRICT ptr, linenum_t *RESTRICT start,
 
 static void lrg_free_linebuf(void) { lrg_free(linesbuf); }
 
-#if CHAR_BIT != 8 || !defined(LRG_MEMCNT_WORD) || !defined(UINTPTR_MAX)
-/* unsupported */
-#undef LRG_TRY_FAST_MEMCNT
-#define LRG_TRY_FAST_MEMCNT 0
-#endif
-
-#if !LRG_NO_UINT64 && LRG_TRY_FAST_MEMCNT && defined(UINT64_MAX) &&            \
-    UINTPTR_MAX > UINT32_MAX
-typedef uint64_t memcnt_word_t;
-#define LRG_MEMCNT_WORD 64
-#define LRG_MEMCNT_COUNT 8
-#elif !LRG_NO_UINT32 && LRG_TRY_FAST_MEMCNT && defined(UINT32_MAX)
-typedef uint32_t memcnt_word_t;
-#define LRG_MEMCNT_WORD 32
-#define LRG_MEMCNT_COUNT 4
-#else
-#undef LRG_TRY_FAST_MEMCNT
-#define LRG_TRY_FAST_MEMCNT 0
-#endif
-
-#if LRG_TRY_FAST_MEMCNT
-#if __GNUC__
-#define popcount32 __builtin_popcount
-#define popcount64 __builtin_popcountl
-#else
-INLINE int popcount32(uint32_t v) {
-    int c = 0;
-    for (; v; ++c)
-        v &= v - 1;
-    return c;
-}
-INLINE int popcount64(uint64_t v) {
-    int c = 0;
-    for (; v; ++c)
-        v &= v - 1;
-    return c;
-}
-#endif
-#endif
-
-/* counts the number of bytes equal to value within a buffer */
-size_t memcnt(const void *ptr, int value, size_t num) {
-    size_t c = 0;
-    const char *p = ptr;
-#if LRG_TRY_FAST_MEMCNT
-    if (num > LRG_MEMCNT_WORD * 4) {
-        /* mask = bytes with only their lowest bit set in word */
-#if LRG_MEMCNT_WORD == 32
-        const memcnt_word_t mask = 0x01010101ULL;
-#define POPCOUNT popcount32
-#elif LRG_MEMCNT_WORD == 64
-        const memcnt_word_t mask = 0x0101010101010101ULL;
-#define POPCOUNT popcount64
-#endif
-        /* with * mask, we "broadcast" the byte all over the word */
-        memcnt_word_t cmp = (memcnt_word_t)(value * mask), tmp;
-        const memcnt_word_t *wp;
-        /* handle unaligned ptr */
-        while ((uintptr_t)p & (LRG_MEMCNT_COUNT - 1))
-            --num, c += *p++ == value;
-        wp = (const memcnt_word_t *)p;
-        while (num >= LRG_MEMCNT_COUNT) {
-            num -= LRG_MEMCNT_COUNT;
-            /* XOR with cmp - now bytes equal to value are 00s */
-            tmp = *wp++ ^ cmp;
-            /* count zero bytes in word tmp and add to c */
-            /* shifts make sure the low bits in each byte are set if any
-               of the bits in the byte were set */
-            tmp |= tmp >> 4;
-            tmp |= tmp >> 2;
-            tmp |= tmp >> 1;
-            /* masks out anything else but the lowest bits in each byte */
-            tmp &= mask;
-            /* popcount will then give us the number of bytes that weren't 00.
-               subtract from the number of bytes in the word to inverse */
-            c += LRG_MEMCNT_COUNT - POPCOUNT(tmp);
-        }
-        /* assign pointer back to handle unaligned again */
-        p = (const char *)wp;
-    }
-#endif
-    while (num--)
-        c += *p++ == value;
-    return c;
-}
-
 static int lrg_parse_lines(char *ln) {
     char *oldptr = ln;
     int pl = 0;
@@ -573,22 +548,22 @@ static int lrg_parse_lines(char *ln) {
             continue;
         }
 
-        if (linesbuf_n == linesbuf_c) {
+        if (n_linesbuf == c_linesbuf) {
             /* don't try to call realloc on the static buffer! */
-            if (linesbuf == linesbuf_static) {
+            if (linesbuf == st_linesbuf) {
                 linesbuf = lrg_malloc(sizeof(struct lrg_linerange) *
-                                      (linesbuf_c *= 2));
+                                      (c_linesbuf *= 2));
                 if (!linesbuf) {
                     lrg_alloc_fail();
                     return 1;
                 }
-                memcpy(linesbuf, linesbuf_static,
-                       sizeof(struct lrg_linerange) * linesbuf_n);
+                memcpy(linesbuf, st_linesbuf,
+                       sizeof(struct lrg_linerange) * n_linesbuf);
                 atexit(&lrg_free_linebuf);
 
             } else {
                 struct lrg_linerange *newptr = lrg_realloc(
-                    linesbuf, sizeof(struct lrg_linerange) * (linesbuf_c *= 2));
+                    linesbuf, sizeof(struct lrg_linerange) * (c_linesbuf *= 2));
                 if (!newptr) {
                     lrg_alloc_fail();
                     return 1;
@@ -597,10 +572,10 @@ static int lrg_parse_lines(char *ln) {
             }
         }
 
-        linesbuf[linesbuf_n].first = l0;
-        linesbuf[linesbuf_n].last = l1;
-        linesbuf[linesbuf_n].text = oldptr;
-        ++linesbuf_n;
+        linesbuf[n_linesbuf].first = l0;
+        linesbuf[n_linesbuf].last = l1;
+        linesbuf[n_linesbuf].text = oldptr;
+        ++n_linesbuf;
 
         oldptr = ln;
     }
@@ -651,7 +626,7 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
     JUMP_LINE(1);
     read_n = 0;
 
-    for (range_i = 0; range_i < linesbuf_n; ++range_i) {
+    for (range_i = 0; range_i < n_linesbuf; ++range_i) {
         range = linesbuf[range_i];
 
         if (UNLIKELY(range.first > eof_at)) {
@@ -707,7 +682,7 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
                     read_n = READ_BUFFER(tmpbuf, sizeof(tmpbuf));
                     if (UNLIKELY(read_n <= 0))
                         goto read_error;
-#if LRG_HAVE_TURBO_MEMCNT
+#if LRG_FAST_MEMCNT
                     if (linenum < range.first &&
                         range.first - linenum > read_n) {
                         /* still a long way to go. if we are still 2000 lines
@@ -744,8 +719,8 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
 
             if (had_eol) {
 #if LRG_SUPPORT_LPS
-                if (lrg_lps_enable)
-                    lrg_lps_sleep();
+                if (lps_enable)
+                    lps_sleep();
 #endif
                 show_this_linenum = show_linenums; /* maybe show again */
                 if (linenum++ == range.last)
@@ -830,12 +805,12 @@ int main(int argc, char *argv[]) {
                     if (++i < argc)
                         f = atof(argv[i]);
                     if (f <= 0.001f || f > 1000000.f) {
-                        lrg_error_option_s(OPT_ERR_PARAM, rest);
+                        lrg_opts_error(OPT_ERR_PARAM, rest);
                         return EXITCODE_USE;
                     }
-                    lrg_lps_init(f);
+                    lps_init(f);
 #else
-                    lrg_error_option_s(OPT_ERR_UNSUP, rest);
+                    lrg_opts_error(OPT_ERR_UNSUP, rest);
                     return EXITCODE_USE;
 #endif
                 } else if (!strcmp(rest, "help")) {
@@ -845,7 +820,7 @@ int main(int argc, char *argv[]) {
                     lrg_printversion();
                     return EXITCODE_OK;
                 } else {
-                    lrg_error_option_s(OPT_ERR_INVAL, rest);
+                    lrg_opts_error(OPT_ERR_INVAL, rest);
                     return EXITCODE_USE;
                 }
             } else {
@@ -864,7 +839,7 @@ int main(int argc, char *argv[]) {
                         lrg_printhelp();
                         return EXITCODE_OK;
                     } else {
-                        lrg_error_option_c(OPT_ERR_INVAL, c);
+                        lrg_optc_error(OPT_ERR_INVAL, c);
                         return EXITCODE_USE;
                     }
                 }
@@ -878,7 +853,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    if (!linesbuf_n) {
+    if (!n_linesbuf) {
         lrg_showusage();
         return EXITCODE_USE;
     }

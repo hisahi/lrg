@@ -57,7 +57,8 @@ Extra (POSIX-exclusive) feature:
 
 lrg is distributed as a single standalone .c file that can be compiled
 with the vast majority of ANSI C (C89) standard-compliant C compilers, basically
-any compiler with a reasonable length limit (at least ~20-ish) for identifiers.
+any compiler with a reasonable length limit (at least ~20 significant initial
+characters) for (external) identifiers.
 
 While the base program is fully functional on ANSI C, on modern versions
 of POSIX, an enhanced and optimized version can be compiled instead (and
@@ -80,22 +81,23 @@ program. All defines are either 0 or 1, unless otherwise mentioned:
 * `LRG_BACKWARD_SCAN_THRESHOLD` - backwards scan will only be used if the target
   line number is greater than this threshold (this is a necessary but not a
   sufficient condition).
-* `LRG_TRY_FAST_MEMCNT` - lrg makes use of a function called `memcnt` which
+* `LRG_HOSTED_MEMCNT` - lrg makes use of a function called `memcnt` which
   counts the number of bytes in a buffer that equal some value. This function
   is not in the C standard, but not much sets it apart from those that are. The
-  code includes a naive reference implementation as well as an optimized one
-  that uses 32-bit or 64-bit words to speed up the process. This should
-  generally be enabled (and is by default), but with some compilers, the naive
-  implementation can actually be _faster_ due to autovectorization in which case
-  this can be disabled. The "optimized" `memcnt` might also not be supported on
-  all systems in which case this define has no effect.
-* `LRG_HAVE_TURBO_MEMCNT` - if enabled, `memcnt` will be used to quickly scan
+  code includes a naive reference implementation, which tends to optimize pretty
+  well with modern optimizing compilers. However, if you want to link an
+  external implementation of `memcnt`, such as from
+  [hisahi/memcnt](https://github.com/hisahi/memcnt), set this to 1. The linked
+  implementation must have a certain signature and meet certain specifications;
+  see the setting for `LRG_HOSTED_MEMCNT` under lrg.c for more.
+* `LRG_FAST_MEMCNT` - if enabled, `memcnt` will be used to quickly scan
   over buffers which cannot contain the requested line. This can considerably
   speed up reading large files, but requires that the `memcnt` implementation is
   quick enough to outperform the standard reading procedure. This is only ever
-  practically the case if `memcnt` is auto-vectorized, especially if your
-  implementation of the standard library has a very well optimized `memchr`
-  (standard C function).
+  practically the case when the highest optimization level is used and the
+  `memcnt` function gets autovectorized, or if you link an external
+  implementation that is fast enough (this is indeed enabled by default if
+  `LRG_HOSTED_MEMCNT` is set to 1).
 * `LRG_FILLBUF_MODE` - 2 by default, which is the recommended value. If 2, lrg
   will use separate functions for reading from files and pipes (distinguished
   by whether a stream is seekable). 0 forces the use of file reading functions
