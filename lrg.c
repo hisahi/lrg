@@ -97,7 +97,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
    beyond its bounds or if ptr is a null pointer. if not undefined, the
    implementation shall return the same value as the following function with
    the same parameters:
-   
+
     size_t memcnt(const void *s, int c, size_t n) {
         size_t i, count = 0;
         const unsigned char *p = (const unsigned char *)s, v = (unsigned char)c;
@@ -188,6 +188,8 @@ typedef unsigned long linenum_t;
 /* ALIGNAS: aligns buffer to N-byte boundary, or does nothing if N == 0 */
 #if LRG_C11
 #define ALIGNAS(N) _Alignas(N)
+#elif defined(__GNUC__)
+#define ALIGNAS(N) __attribute__((aligned(N)))
 #else
 #define ALIGNAS(N)
 #endif
@@ -267,15 +269,46 @@ static const char *STDIN_FILE = "-";
 
 static void lrg_printversion(void) {
     fprintf(stdout, "lrg by Sampo Hippeläinen (hisahi) - version " __DATE__ "\n"
+                    "Version: "
 #if LRG_POSIX
-                    "POSIX version\n"
+                    "lrg_posix"
 #else
-                    "ANSI C version\n"
+                    "lrg_ansi"
 #endif
-    );
+                    " memcnt-"
+#if LRG_HOSTED_MEMCNT
+                    "external"
+#else
+                    "internal"
+#endif
+#if LRG_FAST_MEMCNT
+                    "-fast"
+#endif
+                    "\n");
     fprintf(stdout, "Copyright (c) 2017-2021 Sampo Hippeläinen (hisahi)\n"
                     "This program is free software and comes with ABSOLUTELY "
                     "NO WARRANTY.\n");
+}
+
+#define PRINT_FLAG(fmt, fl) fprintf(stdout, "%s=" fmt "\n", #fl, fl);
+
+static void lrg_printversionversion(void) {
+    lrg_printversion();
+    fprintf(stdout, "Full build flags:\n");
+    PRINT_FLAG("%d", LRG_POSIX);
+    PRINT_FLAG("%d", LRG_C99);
+    PRINT_FLAG("%d", LRG_C11);
+    PRINT_FLAG("%d", LRG_BACKWARD_SCAN);
+    PRINT_FLAG("%d", LRG_BACKWARD_SCAN_THRESHOLD);
+    PRINT_FLAG("%d", LRG_HOSTED_MEMCNT);
+    PRINT_FLAG("%d", LRG_FAST_MEMCNT);
+    PRINT_FLAG("%d", LRG_FILLBUF_MODE);
+    PRINT_FLAG("%d", LRG_BUFSIZE);
+    PRINT_FLAG("%d", LRG_LINEBUFSIZE);
+    PRINT_FLAG("%d", LRG_BUFFER_ALIGN);
+    PRINT_FLAG("%d", LRG_SUPPORT_LPS);
+    PRINT_FLAG("%" LINENUM_FMT, LINENUM_MAX);
+    PRINT_FLAG("%%%s", LINENUM_FMT);
 }
 
 static void lrg_printhelp(void) {
@@ -395,9 +428,10 @@ INLINE void lrg_alloc_fail(void) {
 #if !LRG_HOSTED_MEMCNT
 size_t memcnt(const void *ptr, int value, size_t num) {
     size_t c = 0;
-    const char *p = ptr;
+    const unsigned char *p = (const unsigned char *)ptr,
+                        v = (unsigned char)value;
     while (num--)
-        c += *p++ == value;
+        c += *p++ == v;
     return c;
 }
 #endif
@@ -818,6 +852,9 @@ int main(int argc, char *argv[]) {
                     return EXITCODE_OK;
                 } else if (!strcmp(rest, "version")) {
                     lrg_printversion();
+                    return EXITCODE_OK;
+                } else if (!strcmp(rest, "versionversion")) {
+                    lrg_printversionversion();
                     return EXITCODE_OK;
                 } else {
                     lrg_opts_error(OPT_ERR_INVAL, rest);

@@ -37,4 +37,5 @@ Test compiler: clang 10.0.0-4ubuntu1
 
 Test version: lrg, [commit 94c74d7cb07552663900a29a599c75beddadf0e3](https://github.com/hisahi/lrg/tree/94c74d7cb07552663900a29a599c75beddadf0e3)
 
-For lrg `-O3`, the preprocessor define `-DLRG_TRY_FAST_MEMCNT=0` was used.
+For lrg `-O3`, the preprocessor define `-DLRG_TRY_FAST_MEMCNT=0` was used
+(in modern lrg, this flag does not exist anymore).
