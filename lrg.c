@@ -20,6 +20,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 */
 
+/* a pair of integers that is meant to increase with every change
+   newer version is with higher MAJOR or equal MAJOR and higher MINOR */
+#define LRG_V_MAJOR 1
+#define LRG_V_MINOR 0
+
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
@@ -258,6 +263,10 @@ INLINE void lps_sleep(void) { nanosleep(&posixnsreq, NULL); }
 
 #endif
 
+#ifndef LRG_SUPPORT_LPS
+#define LRG_SUPPORT_LPS 0
+#endif
+
 /* ========================================================= */
 /*                          strings                          */
 /* ========================================================= */
@@ -267,24 +276,34 @@ INLINE void lps_sleep(void) { nanosleep(&posixnsreq, NULL); }
    command line. - is the convention for *nix systems */
 static const char *STDIN_FILE = "-";
 
+/* language name in English, all lowercase, replace spaces with hyphens */
+#define LANGUAGE_NAME "english"
+/* how stdin is shown in error messages, etc. */
+#define STDIN_FILENAME_APPEARANCE "(stdin)"
+/* for -f/--file-names */
+#define FILE_DISPLAY_FMT "%s\n"
+/* for -l/--line-numbers */
+#define LINE_DISPLAY_FMT " %7" LINENUM_FMT "   "
+
 static void lrg_printversion(void) {
-    fprintf(stdout, "lrg by Sampo Hippeläinen (hisahi) - version " __DATE__ "\n"
-                    "Version: "
+    fprintf(stdout, "lrg by Sampo Hippeläinen (hisahi), compiled " __DATE__ ", "
+                    "numbered v%d.%d\n", LRG_V_MAJOR, LRG_V_MINOR);
+    fprintf(stdout, "Variant: "
 #if LRG_POSIX
                     "lrg_posix"
 #else
                     "lrg_ansi"
 #endif
-                    " memcnt-"
+                    " memcnt_"
 #if LRG_HOSTED_MEMCNT
                     "external"
 #else
                     "internal"
 #endif
 #if LRG_FAST_MEMCNT
-                    "-fast"
+                    "_fast"
 #endif
-                    "\n");
+                    " language_" LANGUAGE_NAME "\n");
     fprintf(stdout, "Copyright (c) 2017-2021 Sampo Hippeläinen (hisahi)\n"
                     "This program is free software and comes with ABSOLUTELY "
                     "NO WARRANTY.\n");
@@ -354,13 +373,6 @@ static void lrg_printhelp(void) {
             "                 displaying 2*M+1 lines\n"
             "                 if M not specified, defaults to 3\n\n");
 }
-
-/* how stdin is shown in error messages, etc. */
-#define STDIN_FILENAME_APPEARANCE "(stdin)"
-/* for -f/--file-names */
-#define FILE_DISPLAY_FMT "%s\n"
-/* for -l/--line-numbers */
-#define LINE_DISPLAY_FMT " %7" LINENUM_FMT "   "
 
 /* used in error messages */
 #define OPER_SEEK "seeking"
