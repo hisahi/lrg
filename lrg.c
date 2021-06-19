@@ -23,7 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 /* a pair of integers that is meant to increase with every change
    newer version is with higher MAJOR or equal MAJOR and higher MINOR */
 #define LRG_V_MAJOR 1
-#define LRG_V_MINOR 1
+#define LRG_V_MINOR 2
 
 #include <ctype.h>
 #include <errno.h>
@@ -64,9 +64,26 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #if !LRG_NO_POSIX && defined(_POSIX_C_SOURCE) && defined(_POSIX_VERSION) &&    \
     _POSIX_VERSION >= _POSIX_C_SOURCE
 #define LRG_POSIX 1
+#include <sys/stat.h>
 #include <time.h>
 #else
 #define LRG_POSIX 0
+#endif
+
+#if !LRG_NO_WIN32 && defined(_WIN32)
+#define LRG_WIN32 1
+#include <io.h>
+#include <sys/stat.h>
+#define NOMINMAX 1
+#include <Windows.h>
+#else
+#define LRG_WIN32 0
+#endif
+
+#if defined(MSDOS) || defined(__MSDOS__)
+#define LRG_DOS 1
+#else
+#define LRG_DOS 0
 #endif
 
 #if (LRG_C99 && UINTPTR_MAX > UINT32_MAX) || defined(__x86_64__) ||            \
@@ -133,7 +150,7 @@ size_t memcnt(const void *s, int c, size_t n);
 /* buffer size. adjusting this can improve performance considerably and is
    a good place to start if you wish to build a fast lrg for your system */
 #ifndef LRG_BUFSIZE
-#if LRG_POSIX
+#if LRG_POSIX || LRG_WIN32
 #define LRG_BUFSIZE BUFSIZ * 4
 #else
 #define LRG_BUFSIZE BUFSIZ
@@ -194,7 +211,7 @@ typedef unsigned long linenum_t;
 #if LRG_C11
 #define ALIGNAS(N) _Alignas(N)
 #elif defined(__GNUC__)
-#define ALIGNAS(N) __attribute__((aligned(N)))
+#define ALIGNAS(N) __attribute__((aligned((N) ? (N) : 1)))
 #else
 #define ALIGNAS(N)
 #endif
@@ -242,7 +259,25 @@ static int got_eof = 0;
 /*                        support code                       */
 /* ========================================================= */
 
-#if LRG_POSIX
+#if LRG_WIN32
+
+#define NS_PER_SEC 1000000000L
+
+static char lps_enable = 0;
+static DWORD win32SleepInterval;
+
+static void lps_init(float lps) {
+    win32SleepInterval = (DWORD)(1000.0f / lps);
+    if (win32SleepInterval)
+        lps_enable = 1;
+}
+
+INLINE void lps_sleep(void) { Sleep(win32SleepInterval); }
+
+/* we support the --lines-per-second flag */
+#define LRG_SUPPORT_LPS 1
+
+#elif LRG_POSIX
 
 #define NS_PER_SEC 1000000000L
 
@@ -285,12 +320,28 @@ static const char *STDIN_FILE = "-";
 /* for -l/--line-numbers */
 #define LINE_DISPLAY_FMT " %7" LINENUM_FMT "   "
 
+#if LRG_DOS
+#include <conio.h>
+void pauseScreen(void) {
+    printf("--- Press any key to continue ---");
+    fflush(stdout);
+    getch();
+    puts("\n");
+}
+#endif
+
 static void lrg_printversion(void) {
-    fprintf(stdout, "lrg by Sampo Hippeläinen (hisahi), compiled " __DATE__ ", "
-                    "numbered v%d.%d\n", LRG_V_MAJOR, LRG_V_MINOR);
+    fprintf(stdout,
+            "lrg by Sampo Hippeläinen (hisahi), compiled " __DATE__ ", "
+            "numbered v%d.%d\n",
+            LRG_V_MAJOR, LRG_V_MINOR);
     fprintf(stdout, "Variant: "
-#if LRG_POSIX
+#if LRG_WIN32
+                    "lrg_win32"
+#elif LRG_POSIX
                     "lrg_posix"
+#elif LRG_DOS
+                    "lrg_dos"
 #else
                     "lrg_ansi"
 #endif
@@ -315,6 +366,8 @@ static void lrg_printversionversion(void) {
     lrg_printversion();
     fprintf(stdout, "Full build flags:\n");
     PRINT_FLAG("%d", LRG_POSIX);
+    PRINT_FLAG("%d", LRG_WIN32);
+    PRINT_FLAG("%d", LRG_DOS);
     PRINT_FLAG("%d", LRG_C99);
     PRINT_FLAG("%d", LRG_C11);
     PRINT_FLAG("%d", LRG_BACKWARD_SCAN);
@@ -333,14 +386,16 @@ static void lrg_printversionversion(void) {
 static void lrg_printhelp(void) {
     lrg_printversion();
     fprintf(stdout,
-            "\nUsage: %s [OPTION]... range[,range]... "
-            "[input-file]...\n"
+            "\nUsage: %s [OPTION]... RANGE[,RANGE]... [FILE]...\n"
             "Prints a specific range of lines from the given file.\n"
             "Note that 'rewinding' might be impossible - once a line "
             "has been printed,\nit is possible that only lines after it "
             "can be printed.\n"
             "Line numbers start at 1.\n\n",
             myname);
+#if LRG_DOS
+    pauseScreen();
+#endif
     fprintf(stdout,
             "  -?, --help\n"
             "                 prints this message\n"
@@ -358,10 +413,13 @@ static void lrg_printhelp(void) {
     fprintf(stdout,
             "  --lps, --lines-per-second <x>\n"
             "                 prints lines at an (approximate) top speed\n"
-            "                 (minimum 0.001, maximum 1000000)\n");
+            "                 (minimum 0.001, maximum 1000000)\n\n");
+#endif
+#if LRG_DOS
+    pauseScreen();
 #endif
     fprintf(stdout,
-            "\nLine range formats:\n"
+            "Line range formats:\n"
             "   N\n"
             "                 the line with line number N\n"
             "   N-[M]\n"
@@ -387,8 +445,7 @@ static void lrg_printhelp(void) {
 
 INLINE void lrg_showusage(void) {
     fprintf(stderr,
-            "Usage: %s [OPTION]... range"
-            "[,range]... [input-file]...\n" TRY_HELP,
+            "Usage: %s [OPTION]... RANGE[,RANGE]... [FILE]...\n" TRY_HELP,
             myname, myname);
 }
 
@@ -460,17 +517,62 @@ static size_t n_linesbuf = 0;
 /* capacity. if we run past, we need to reallocate the line range buffer */
 static size_t c_linesbuf = sizeof(st_linesbuf) / sizeof(st_linesbuf[0]);
 
-#if LRG_POSIX /* optimized POSIX implementation */
+#if LRG_WIN32 /* implementation for Win32 */
+
+#define GET_FILE_FD _fileno
+#define FILEREF int
+#define FD_SEEK_SET(fd, n) (_lseek(fd, n, SEEK_SET) < 0)
+#define FD_SEEK_CUR(fd, n) (_lseek(fd, n, SEEK_CUR) < 0)
+
+INLINE int lrg_is_seekable(FILEREF fd) {
+    static struct _stat st;
+    if (_fstat(fd, &st))
+        return fd != 0;
+    return (st.st_mode & _S_IFREG) && _lseek(fd, 0, SEEK_SET) == 0 &&
+           _lseek(fd, 1, SEEK_SET) == 1 && _lseek(fd, 0, SEEK_SET) == 0;
+}
+
+INLINE void lrg_initbuffers(void) {}
+
+/* 0 for EOF, -1 for error */
+INLINE int lrg_fillbuf_file(char *buffer, size_t bufsize, FILEREF fd) {
+    return _read(fd, buffer, bufsize);
+}
+
+#define lrg_fillbuf_pipe lrg_fillbuf_file
+/* since pipe/file impls are the same, just use one of them */
+#undef LRG_FILLBUF_MODE
+#define LRG_FILLBUF_MODE 0
+
+#elif LRG_DOS /* implementation for DOS */
+
+INLINE int lrg_is_seekable(FILE *f) {
+    return f != stdin;
+}
+
+/* use standard read funcs */
+#define STDREAD 1
+
+#elif LRG_POSIX /* implementation for POSIX */
 
 #define GET_FILE_FD fileno
 #define FILEREF int
 #define FD_SEEK_SET(fd, n) (lseek(fd, n, SEEK_SET) < 0)
 #define FD_SEEK_CUR(fd, n) (lseek(fd, n, SEEK_CUR) < 0)
 
+INLINE int lrg_is_seekable(FILEREF fd) {
+    static struct stat st;
+    if (fstat(fd, &st))
+        return fd != STDIN_FILENO;
+    return (S_ISREG(st.st_mode) || S_ISBLK(st.st_mode)) &&
+           lseek(fd, 0, SEEK_SET) == 0 && lseek(fd, 1, SEEK_SET) == 1 &&
+           lseek(fd, 0, SEEK_SET) == 0;
+}
+
 INLINE void lrg_initbuffers(void) {}
 
 /* 0 for EOF, -1 for error */
-INLINE int lrg_fillbuf_file(char *buffer, size_t bufsize, int fd) {
+INLINE int lrg_fillbuf_file(char *buffer, size_t bufsize, FILEREF fd) {
     return read(fd, buffer, bufsize);
 }
 
@@ -482,7 +584,18 @@ INLINE int lrg_fillbuf_file(char *buffer, size_t bufsize, int fd) {
 #else /* standard C implementation */
 
 #define FILEREF FILE *
+/* use standard seek check */
+#define STDSEEKCH 1
+/* use standard read funcs */
+#define STDREAD 1
 
+#endif
+
+#if STDSEEKCH
+INLINE int lrg_is_seekable(FILE *f) { return !fseek(f, 0, SEEK_SET); }
+#endif
+
+#if STDREAD
 INLINE void lrg_initbuffers(void) {}
 
 /* 0 for EOF, -1 for error */
@@ -515,7 +628,6 @@ INLINE int lrg_fillbuf_pipe(char *buffer, size_t bufsize, FILE *file) {
     }
     return p - buffer;
 }
-
 #endif
 
 static int lrg_read_linenum(char *str, char **endptr, linenum_t *out,
@@ -632,8 +744,7 @@ static int lrg_parse_lines(char *ln) {
     } while (0);
 
 INLINE int lrg_processfile(const char *fn, FILE *f) {
-    int read_n, had_eol, can_seek = !fseek(f, 0, SEEK_SET),
-                         show_this_linenum = show_linenums;
+    int read_n, had_eol, can_seek, show_this_linenum = show_linenums;
     char *buf_prev, *buf_next, *buf_end = NULL;
     struct lrg_linerange range;
     linenum_t linenum, eof_at = LINENUM_MAX;
@@ -645,11 +756,13 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
 #define READ_BUFFER_PIPE(buf, sz) lrg_fillbuf_pipe(buf, sz, fd)
 #define FILE_SEEK_SET(n) FD_SEEK_SET(fd, n)
 #define FILE_SEEK_CUR(n) FD_SEEK_CUR(fd, n)
+    can_seek = lrg_is_seekable(fd);
 #else
 #define READ_BUFFER_FILE(buf, sz) lrg_fillbuf_file(buf, sz, f)
 #define READ_BUFFER_PIPE(buf, sz) lrg_fillbuf_pipe(buf, sz, f)
 #define FILE_SEEK_SET(n) fseek(f, n, SEEK_SET)
 #define FILE_SEEK_CUR(n) fseek(f, n, SEEK_CUR)
+    can_seek = lrg_is_seekable(f);
 #endif
 
 #if LRG_FILLBUF_MODE == 0
@@ -827,8 +940,13 @@ int main(int argc, char *argv[]) {
 
     /* note: we will modify argv so that it only has the input files */
     for (i = 1; i < argc; ++i) {
+#if LRG_DOS || LRG_WINDOWS
+        if (flag_ok && (argv[i][0] == '-' || argv[i][0] == '/') && argv[i][1]) {
+            if (argv[i][0] == '-' && argv[i][1] == '-') {
+#else
         if (flag_ok && argv[i][0] == '-' && argv[i][1]) {
             if (argv[i][1] == '-') {
+#endif
                 /* -- = long flag */
                 char *rest = argv[i] + 2;
                 if (!*rest) { /* "--" - end of flags */
@@ -847,7 +965,7 @@ int main(int argc, char *argv[]) {
 #if LRG_SUPPORT_LPS
                     float f = 0;
                     if (++i < argc)
-                        f = atof(argv[i]);
+                        f = (float)atof(argv[i]);
                     if (f <= 0.001f || f > 1000000.f) {
                         lrg_opts_error(OPT_ERR_PARAM, rest);
                         return EXITCODE_USE;
