@@ -114,6 +114,11 @@ number N in Linux, it is also plenty fast too! See `BENCHMARK.md`.
 
 Issues and pull requests are welcome.
 
+The `test` folder contains a Python 3 script that can be used to test lrg. If
+you introduce changes, make sure to run the test script if possible. It tries
+to run the command `lrg` by default, but you can change the executable name
+by supplying it as a command line argument.
+
 # Notes
 
 All files in this repository are encoded in UTF-8.

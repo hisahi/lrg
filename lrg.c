@@ -23,7 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 /* a pair of integers that is meant to increase with every change
    newer version is with higher MAJOR or equal MAJOR and higher MINOR */
 #define LRG_V_MAJOR 1
-#define LRG_V_MINOR 0
+#define LRG_V_MINOR 1
 
 #include <ctype.h>
 #include <errno.h>
@@ -589,11 +589,6 @@ static int lrg_parse_lines(char *ln) {
             return 1;
         }
 
-        if (l0 > l1) {
-            oldptr = ln;
-            continue;
-        }
-
         if (n_linesbuf == c_linesbuf) {
             /* don't try to call realloc on the static buffer! */
             if (linesbuf == st_linesbuf) {
@@ -674,6 +669,9 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
 
     for (range_i = 0; range_i < n_linesbuf; ++range_i) {
         range = linesbuf[range_i];
+
+        if (UNLIKELY(range.first > range.last))
+            continue;
 
         if (UNLIKELY(range.first > eof_at)) {
             /* we already know this won't work */
