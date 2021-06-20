@@ -23,7 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 /* a pair of integers that is meant to increase with every change
    newer version is with higher MAJOR or equal MAJOR and higher MINOR */
 #define LRG_V_MAJOR 1
-#define LRG_V_MINOR 2
+#define LRG_V_MINOR 3
 
 #include <ctype.h>
 #include <errno.h>
@@ -56,7 +56,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
     (HAVE_UNISTD_H || defined(__unix__) || defined(__unix) ||                  \
      defined(__QNX__) || (defined(__APPLE__) && defined(__MACH__)))
 #ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200112L
 #endif
 #include <unistd.h>
 #endif
@@ -173,6 +173,11 @@ size_t memcnt(const void *s, int c, size_t n);
 /* 0 is ignored */
 #define LRG_BUFFER_ALIGN 0
 #endif
+#endif
+
+/* use posix_fadvise on POSIX if supported */
+#ifndef LRG_POSIX_FADVISE
+#define LRG_POSIX_FADVISE 1
 #endif
 
 #if LRG_C99
@@ -376,6 +381,7 @@ static void lrg_printversionversion(void) {
     PRINT_FLAG("%d", LRG_FAST_MEMCNT);
     PRINT_FLAG("%d", LRG_FILLBUF_MODE);
     PRINT_FLAG("%d", LRG_BUFSIZE);
+    PRINT_FLAG("%d", LRG_POSIX_FADVISE);
     PRINT_FLAG("%d", LRG_LINEBUFSIZE);
     PRINT_FLAG("%d", LRG_BUFFER_ALIGN);
     PRINT_FLAG("%d", LRG_SUPPORT_LPS);
@@ -630,6 +636,15 @@ INLINE int lrg_fillbuf_pipe(char *buffer, size_t bufsize, FILE *file) {
 }
 #endif
 
+#if LRG_POSIX_FADVISE && !(LRG_POSIX && _POSIX_VERSION >= 200112L)
+#undef LRG_POSIX_FADVISE
+#define LRG_POSIX_FADVISE 0
+#endif
+
+#if LRG_POSIX_FADVISE
+#include <fcntl.h>
+#endif
+
 static int lrg_read_linenum(char *str, char **endptr, linenum_t *out,
                             linenum_t fallback, char allow_zero) {
     linenum_t result;
@@ -777,6 +792,10 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
     (can_seek ? (READ_BUFFER_FILE(buf, sz)) : (READ_BUFFER_PIPE(buf, sz)))
 #endif
 
+#if LRG_POSIX_FADVISE
+    if (can_seek)
+        posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+#endif
     JUMP_LINE(1);
     read_n = 0;
 
@@ -806,6 +825,10 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
 #if LRG_BACKWARD_SCAN
             if (range.first > LRG_BACKWARD_SCAN_THRESHOLD &&
                 range.first > linenum / 2) {
+#if LRG_POSIX_FADVISE
+                if (can_seek)
+                    posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
+#endif
                 linenum -= memcnt(tmpbuf, '\n', buf_next - tmpbuf);
                 /* scan backwards until we reach the correct previous line.
                    can_seek assumed to be true and range.first > 1 */
@@ -828,6 +851,10 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
                     lrg_no_rewind(fn, range.text);
                     return 1;
                 }
+#if LRG_POSIX_FADVISE
+                if (can_seek)
+                    posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+#endif
                 JUMP_LINE(1);
             }
         }

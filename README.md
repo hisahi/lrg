@@ -104,6 +104,8 @@ program. All defines are either 0 or 1, unless otherwise mentioned:
   and 1 the use of pipe reading functions. On modern platforms with branch
   prediction, there should not really be any reason for this to not be 2, unless
   the file and pipe reading functions are identical.
+* `LRG_POSIX_FADVISE` - 1 by default. enables the use of `posix_fadvise` on
+  supported systems, and does nothing if not supported.
 
 # Performance
 
