@@ -1,0 +1,3 @@
+[submodule "memcnt"]
+	path = memcnt
+	url = https://github.com/hisahi/memcnt.git
