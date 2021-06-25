@@ -6,7 +6,11 @@ CCFLAGS?=
 OPTFLAGS?=-O2
 LDFLAGS?=
 MEMCNT?=
-prefix?=/usr/local
+PREFIX?=/usr/local
+
+ifneq ($(prefix),)
+    PREFIX:=$(prefix)
+endif
 
 .PHONY: all clean install
 
@@ -23,7 +27,7 @@ clean:
 	rm lrg
 
 install:
-	cp lrg $(prefix)/bin/
+	cp lrg $(PREFIX)/bin/
 
 
 
