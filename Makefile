@@ -1,11 +1,12 @@
 
+-include config.inc
+
 CC?=cc
-CCFLAGS?=-O3 -march=native
+CCFLAGS?=
+OPTFLAGS?=-O2
 LDFLAGS?=
 MEMCNT?=
 prefix?=/usr/local
-
--include config.inc
 
 .PHONY: all clean install
 
@@ -13,9 +14,9 @@ all: lrg
 
 lrg: lrg.c
 ifeq ($(MEMCNT),)
-	$(CC) $(CCFLAGS) -o lrg lrg.c $(LDFLAGS)
+	$(CC) $(CCFLAGS) $(OPTFLAGS) -o lrg lrg.c $(LDFLAGS)
 else
-	$(CC) $(CCFLAGS) $(MEMCNT) -o lrg -DLRG_HOSTED_MEMCNT=1 lrg.c $(LDFLAGS)
+	$(CC) $(CCFLAGS) $(OPTFLAGS) $(MEMCNT) -o lrg -DLRG_HOSTED_MEMCNT=1 lrg.c $(LDFLAGS)
 endif
 
 clean:

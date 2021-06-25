@@ -107,6 +107,8 @@ program. All defines are either 0 or 1, unless otherwise mentioned:
 * `LRG_POSIX_FADVISE` - 1 by default. enables the use of `posix_fadvise` on
   supported systems, and does nothing if not supported.
 
+On *nix systems, you can also use `./configure`, `make`, `sudo make install`.
+
 # Performance
 
 Not only is lrg more intuitive to use than many existing tricks for getting line

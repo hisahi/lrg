@@ -1,14 +1,42 @@
 #!/usr/bin/env sh
 > ./config.inc
+CC=cc
+OPTFLAGS=
+printf "Finding memcnt... "
 if [ -f "memcnt/memcnt.c" ]; then
-    echo "MEMCNT=memcnt/memcnt.c" >> ./config.inc
-    echo "Detected memcnt at memcnt/memcnt.c"
+    echo "MEMCNT?=memcnt/memcnt.c" >> ./config.inc
+    echo "memcnt/memcnt.c"
 else
-    echo "No memcnt found, telling lrg to use its own impl"
+    echo "none, using internal"
 fi
+TESTCNAME="/tmp/test-$$.c"
+TESTPROG="int main(int argc, char* argv[]) { return 0; }"
+echo $TESTPROG > $TESTCNAME
+
+printf "Testing -O3... "
+if $CC -c -O3 -o /dev/null $TESTCNAME >/dev/null 2>/dev/null; then
+    OPTFLAGS="$OPTFLAGS -O3"
+    echo "yes"
+else
+    echo "no"
+    printf "Testing -O2... "
+    if $CC -c -O2 -o /dev/null $TESTCNAME >/dev/null 2>/dev/null; then
+        OPTFLAGS="$OPTFLAGS -O2"
+        echo "yes"
+    else
+        echo "no"
+    fi
+fi
+
+printf "Testing -march=native... "
+if $CC -c -march=native -o /dev/null $TESTCNAME >/dev/null 2>/dev/null; then
+    OPTFLAGS="$OPTFLAGS -march=native"
+    echo "yes"
+else
+    echo "no"
+fi
+
+echo "OPTFLAGS?=$OPTFLAGS" >> ./config.inc
+
+rm $TESTCNAME
 echo "OK; config.inc created for make"
-
-
-
-
-
