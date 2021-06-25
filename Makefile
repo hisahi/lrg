@@ -2,8 +2,8 @@
 CC?=cc
 CCFLAGS?=-O3 -march=native
 LDFLAGS?=
-PREFIX?=/usr/local
 MEMCNT?=
+prefix?=/usr/local
 
 -include config.inc
 
@@ -22,7 +22,7 @@ clean:
 	rm lrg
 
 install:
-	cp lrg $(PREFIX)/bin/
+	cp lrg $(prefix)/bin/
 
 
 
