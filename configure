@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+> ./config.inc
+if [ -f "memcnt/memcnt.c" ]; then
+    echo "MEMCNT=memcnt/memcnt.c" >> ./config.inc
+    echo "Detected memcnt at memcnt/memcnt.c"
+else
+    echo "No memcnt found, telling lrg to use its own impl"
+fi
+echo "OK; config.inc created for make"
+
+
+
+
+
