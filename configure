@@ -9,7 +9,12 @@ if [ -f "memcnt/memcnt.c" ]; then
 else
     echo "none, using internal"
 fi
-TESTCNAME="/tmp/test-$$.c"
+
+if [ -z "$TMPDIR" ]; then
+    TMPDIR=/tmp
+fi
+
+TESTCNAME="$TMPDIR/testconf-$$.c"
 TESTPROG="int main(int argc, char* argv[]) { return 0; }"
 echo $TESTPROG > $TESTCNAME
 
