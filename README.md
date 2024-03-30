@@ -5,7 +5,7 @@ line ranges.
 
 # Copyright & License
 
-lrg (C) Sampo Hippeläinen (hisahi) 2017-2021
+lrg (C) Sampo Hippeläinen (hisahi) 2017-2024
 
 This program is licensed under the GNU General Public License (GPL),
 version 3.0. See `COPYING` for the license.

@@ -1,7 +1,7 @@
 """
 
 Line RanGe (LRG) -- Python script to run automated tests for lrg
-Copyright (c) 2017-2021 Sampo Hippeläinen (hisahi)
+Copyright (c) 2017-2024 Sampo Hippeläinen (hisahi)
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -29,9 +29,9 @@ import traceback
 try:
     import colorama
     colorama.init()
-    color = True
+    USE_COLOR = True
 except:
-    color = False
+    USE_COLOR = False
 
 MAX_LINES = 10000
 
@@ -54,6 +54,8 @@ fuzz.hash = "".join(random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 
 def mapColor(color):
+    if not USE_COLOR:
+        return ""
     return {
         "black": colorama.Fore.BLACK,
         "gray": colorama.Style.BRIGHT + colorama.Fore.BLACK,
@@ -76,7 +78,7 @@ def mapColor(color):
 
 
 def colorPrint(color, *a, **kw):
-    if color:
+    if USE_COLOR:
         modified = list(a)
         modified[0] = "".join(mapColor(c) for c in color.split()) + modified[0]
         modified[-1] += mapColor("reset")
@@ -373,6 +375,7 @@ def runTests(argv):
             break
         elif v == "--":
             noflags = True
+    print("<<< Testing {} >>>".format(BINARY))
     tmp = createFile()
     try:
         printTestSetHeader("File mode")

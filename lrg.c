@@ -3,7 +3,7 @@
 Line RanGe (LRG)
 A tool that allows displaying specific lines of files (or around a
 specific line) with possible line number display
-Copyright (c) 2017-2021 Sampo Hippeläinen (hisahi)
+Copyright (c) 2017-2024 Sampo Hippeläinen (hisahi)
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -23,7 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 /* a pair of integers that is meant to increase with every change
    newer version is with higher MAJOR or equal MAJOR and higher MINOR */
 #define LRG_V_MAJOR 1
-#define LRG_V_MINOR 3
+#define LRG_V_MINOR 4
 
 #include <ctype.h>
 #include <errno.h>
@@ -316,8 +316,8 @@ INLINE void lps_sleep(void) { nanosleep(&posixnsreq, NULL); }
    command line. - is the convention for *nix systems */
 static const char *STDIN_FILE = "-";
 
-/* language name in English, all lowercase, replace spaces with hyphens */
-#define LANGUAGE_NAME "english"
+/* language code as a IETF BCP 47 */
+#define LANGUAGE_CODE "en"
 /* how stdin is shown in error messages, etc. */
 #define STDIN_FILENAME_APPEARANCE "(stdin)"
 /* for -f/--file-names */
@@ -359,8 +359,8 @@ static void lrg_printversion(void) {
 #if LRG_FAST_MEMCNT
                     "_fast"
 #endif
-                    " language_" LANGUAGE_NAME "\n");
-    fprintf(stdout, "Copyright (c) 2017-2021 Sampo Hippeläinen (hisahi)\n"
+                    " language_" LANGUAGE_CODE "\n");
+    fprintf(stdout, "Copyright (c) 2017-2024 Sampo Hippeläinen (hisahi)\n"
                     "This program is free software and comes with ABSOLUTELY "
                     "NO WARRANTY.\n");
 }
@@ -499,20 +499,21 @@ INLINE void lrg_alloc_fail(void) {
 /*                   memcnt implementation                   */
 /* ========================================================= */
 
-/* counts the number of bytes equal to value within a buffer */
 #if !LRG_HOSTED_MEMCNT
+/* counts the number of bytes equal to value within a buffer.
+   simple implementation that is designed to be optimized by a compiler.
+   for human-optimized implementations, see hisahi/memcnt */
 size_t memcnt(const void *ptr, int value, size_t num) {
     size_t c = 0;
     const unsigned char *p = (const unsigned char *)ptr,
                         v = (unsigned char)value;
-    while (num--)
-        c += *p++ == v;
+    while (num--) c += *p++ == v;
     return c;
 }
 #endif
 
 /* ========================================================= */
-/*                     main program code                     */
+/*                     file reading code                     */
 /* ========================================================= */
 
 ALIGNAS(LRG_BUFFER_ALIGN) static char tmpbuf[LRG_BUFSIZE];
@@ -569,7 +570,9 @@ INLINE int lrg_is_seekable(FILE *f) {
 INLINE int lrg_is_seekable(FILEREF fd) {
     static struct stat st;
     if (fstat(fd, &st))
+        /* fallback: assume anything except stdin is seekable */
         return fd != STDIN_FILENO;
+    /* check file mode, and then try to seek */
     return (S_ISREG(st.st_mode) || S_ISBLK(st.st_mode)) &&
            lseek(fd, 0, SEEK_SET) == 0 && lseek(fd, 1, SEEK_SET) == 1 &&
            lseek(fd, 0, SEEK_SET) == 0;
@@ -636,6 +639,10 @@ INLINE int lrg_fillbuf_pipe(char *buffer, size_t bufsize, FILE *file) {
 }
 #endif
 
+/* ========================================================= */
+/*               code scanning files for lines               */
+/* ========================================================= */
+
 #if LRG_POSIX_FADVISE && !(LRG_POSIX && _POSIX_VERSION >= 200112L)
 #undef LRG_POSIX_FADVISE
 #define LRG_POSIX_FADVISE 0
@@ -644,112 +651,6 @@ INLINE int lrg_fillbuf_pipe(char *buffer, size_t bufsize, FILE *file) {
 #if LRG_POSIX_FADVISE
 #include <fcntl.h>
 #endif
-
-static int lrg_read_linenum(char *str, char **endptr, linenum_t *out,
-                            linenum_t fallback, char allow_zero) {
-    linenum_t result;
-    while (isspace(*str))
-        ++str;
-    if (*str == '-')
-        result = 0, *endptr = str;
-    else {
-        result = STR_TO_LINENUM(str, (char **)endptr, 10);
-        if (result == LINENUM_MAX && errno == ERANGE)
-            return -1;
-    }
-    if (!result && (!allow_zero || str == *endptr))
-        result = fallback;
-    *out = result;
-    return allow_zero || result != 0;
-}
-
-/* 0 = ok, < 0 = fail, > 0 = end */
-static int lrg_next_linerange(char **RESTRICT ptr, linenum_t *RESTRICT start,
-                              linenum_t *RESTRICT end) {
-    char *str = *ptr, *endptr;
-    linenum_t line0;
-
-    if (!*str) /* end */
-        return 1;
-    /* must have valid line0 */
-    if (lrg_read_linenum(str, &endptr, &line0, 0, 0) <= 0)
-        return -1;
-
-    if (*endptr == '-') { /* 50-100... */
-        linenum_t line1;
-        if (lrg_read_linenum(endptr + 1, &endptr, &line1, LINENUM_MAX, 0) < 0)
-            return -1;
-        *start = line0, *end = line1;
-
-    } else if (*endptr == '~') { /* 50~ or 50~10... */
-        linenum_t linec;
-        if (lrg_read_linenum(endptr + 1, &endptr, &linec, 3, 1) < 0)
-            return -1;
-        *start = line0 > linec ? line0 - linec : 1;
-        if (line0 + linec < line0) /* overflow protection */
-            return -1;
-        *end = line0 + linec;
-
-    } else {
-        *start = line0, *end = line0;
-    }
-
-    if (*endptr == ',') /* 2,5-6,10~3,... */
-        *endptr++ = 0;  /* for printing .text later on error */
-    else if (*endptr)   /* only comma or end of string allowed */
-        return -1;
-
-    *ptr = endptr;
-    return 0;
-}
-
-static void lrg_free_linebuf(void) { lrg_free(linesbuf); }
-
-static int lrg_parse_lines(char *ln) {
-    char *oldptr = ln;
-    int pl = 0;
-    linenum_t l0 = 0, l1 = 0;
-
-    while ((pl = lrg_next_linerange(&ln, &l0, &l1)) <= 0) {
-        if (pl < 0) {
-            lrg_invalid_range(oldptr);
-            return 1;
-        }
-
-        if (n_linesbuf == c_linesbuf) {
-            /* don't try to call realloc on the static buffer! */
-            if (linesbuf == st_linesbuf) {
-                linesbuf = lrg_malloc(sizeof(struct lrg_linerange) *
-                                      (c_linesbuf *= 2));
-                if (!linesbuf) {
-                    lrg_alloc_fail();
-                    return 1;
-                }
-                memcpy(linesbuf, st_linesbuf,
-                       sizeof(struct lrg_linerange) * n_linesbuf);
-                atexit(&lrg_free_linebuf);
-
-            } else {
-                struct lrg_linerange *newptr = lrg_realloc(
-                    linesbuf, sizeof(struct lrg_linerange) * (c_linesbuf *= 2));
-                if (!newptr) {
-                    lrg_alloc_fail();
-                    return 1;
-                }
-                linesbuf = newptr;
-            }
-        }
-
-        linesbuf[n_linesbuf].first = l0;
-        linesbuf[n_linesbuf].last = l1;
-        linesbuf[n_linesbuf].text = oldptr;
-        ++n_linesbuf;
-
-        oldptr = ln;
-    }
-
-    return 0;
-}
 
 #define JUMP_LINE(ln)                                                          \
     do {                                                                       \
@@ -867,15 +768,20 @@ INLINE int lrg_processfile(const char *fn, FILE *f) {
                     if (UNLIKELY(read_n <= 0))
                         goto read_error;
 #if LRG_FAST_MEMCNT
-                    if (linenum < range.first &&
-                        range.first - linenum > read_n) {
-                        /* still a long way to go. if we are still 2000 lines
-                           away and the buffer has 1000 bytes, obviously this
-                           data will not have the line we're looking for. thus,
-                           we'll just count the number of newlines and fill
-                           the buffer with new data */
-                        linenum += memcnt(tmpbuf, '\n', read_n);
-                        continue;
+                    if (linenum < range.first - 1) {
+                        /* count the number of newlines with memcnt. if we find
+                           the line we're looking for, start looking for it;
+                           else skip the entire block. e.g. if we are still
+                           2000 lines away and the buffer has 1000 bytes,
+                           obviously this data will not have the line we're
+                           looking for. thus, we'll just count the number of
+                           newlines and fill the buffer with new data. */
+                        linenum_t linenum_eob = linenum
+                                            + memcnt(tmpbuf, '\n', read_n);
+                        if (linenum_eob < range.first) {
+                            linenum = linenum_eob;
+                            continue;
+                        }
                     }
 #endif
                     buf_next = tmpbuf, buf_end = tmpbuf + read_n;
@@ -960,23 +866,142 @@ static int lrg_nextfile(const char *fn) {
     return returncode;
 }
 
+/* ========================================================= */
+/*              line number syntax parsing code              */
+/* ========================================================= */
+
+static int lrg_read_linenum(char *str, char **endptr, linenum_t *out,
+                            linenum_t fallback, char allow_zero) {
+    linenum_t result;
+    while (isspace(*str))
+        ++str;
+    if (*str == '-')
+        result = 0, *endptr = str;
+    else {
+        result = STR_TO_LINENUM(str, (char **)endptr, 10);
+        if (result == LINENUM_MAX && errno == ERANGE)
+            return -1;
+    }
+    if (!result && (!allow_zero || str == *endptr))
+        result = fallback;
+    *out = result;
+    return allow_zero || result != 0;
+}
+
+/* 0 = ok, < 0 = fail, > 0 = end */
+static int lrg_next_linerange(char **RESTRICT ptr, linenum_t *RESTRICT start,
+                              linenum_t *RESTRICT end) {
+    char *str = *ptr, *endptr;
+    linenum_t line0;
+
+    if (!*str) /* end */
+        return 1;
+    /* must have valid line0 */
+    if (lrg_read_linenum(str, &endptr, &line0, 0, 0) <= 0)
+        return -1;
+
+    if (*endptr == '-') { /* 50-100... */
+        linenum_t line1;
+        if (lrg_read_linenum(endptr + 1, &endptr, &line1, LINENUM_MAX, 0) < 0)
+            return -1;
+        *start = line0, *end = line1;
+
+    } else if (*endptr == '~') { /* 50~ or 50~10... */
+        linenum_t linec;
+        if (lrg_read_linenum(endptr + 1, &endptr, &linec, 3, 1) < 0)
+            return -1;
+        *start = line0 > linec ? line0 - linec : 1;
+        if (line0 + linec < line0) /* overflow protection */
+            return -1;
+        *end = line0 + linec;
+
+    } else {
+        *start = line0, *end = line0;
+    }
+
+    if (*endptr == ',') /* 2,5-6,10~3,... */
+        *endptr++ = 0;  /* for printing .text later on error */
+    else if (*endptr)   /* only comma or end of string allowed */
+        return -1;
+
+    *ptr = endptr;
+    return 0;
+}
+
+static void lrg_free_linebuf(void) { lrg_free(linesbuf); }
+
+static int lrg_parse_lines(char *ln) {
+    char *oldptr = ln;
+    int pl = 0;
+    linenum_t l0 = 0, l1 = 0;
+
+    while ((pl = lrg_next_linerange(&ln, &l0, &l1)) <= 0) {
+        if (pl < 0) {
+            lrg_invalid_range(oldptr);
+            return 1;
+        }
+
+        if (n_linesbuf == c_linesbuf) {
+            /* don't try to call realloc on the static buffer! */
+            if (linesbuf == st_linesbuf) {
+                linesbuf = lrg_malloc(sizeof(struct lrg_linerange) *
+                                      (c_linesbuf *= 2));
+                if (!linesbuf) {
+                    lrg_alloc_fail();
+                    return 1;
+                }
+                memcpy(linesbuf, st_linesbuf,
+                       sizeof(struct lrg_linerange) * n_linesbuf);
+                atexit(&lrg_free_linebuf);
+
+            } else {
+                struct lrg_linerange *newptr = lrg_realloc(
+                    linesbuf, sizeof(struct lrg_linerange) * (c_linesbuf *= 2));
+                if (!newptr) {
+                    lrg_alloc_fail();
+                    return 1;
+                }
+                linesbuf = newptr;
+            }
+        }
+
+        linesbuf[n_linesbuf].first = l0;
+        linesbuf[n_linesbuf].last = l1;
+        linesbuf[n_linesbuf].text = oldptr;
+        ++n_linesbuf;
+
+        oldptr = ln;
+    }
+
+    return 0;
+}
+
+/* ========================================================= */
+/*                     main program code                     */
+/* ========================================================= */
+
+#if LRG_DOS || LRG_WINDOWS
+#define LRG_IS_SWITCH(x) (((x)[0] == '-' || (x)[0] == '/') && ((x)[1]))
+#define LRG_IS_LONG_SWITCH(x) ((x)[0] == '-' && (x)[1] == '-')
+#else
+#define LRG_IS_SWITCH(x) (((x)[0] == '-') && ((x)[1]))
+#define LRG_IS_LONG_SWITCH(x) ((x)[1] == '-')
+#endif
+
 int main(int argc, char *argv[]) {
     int flag_ok = 1, i, fend = 0, inputLines = 0;
     myname = argv[0];
+
+    /* ensure numbers show up in C locale */
     setlocale(LC_NUMERIC, "C");
 
     /* note: we will modify argv so that it only has the input files */
     for (i = 1; i < argc; ++i) {
-#if LRG_DOS || LRG_WINDOWS
-        if (flag_ok && (argv[i][0] == '-' || argv[i][0] == '/') && argv[i][1]) {
-            if (argv[i][0] == '-' && argv[i][1] == '-') {
-#else
-        if (flag_ok && argv[i][0] == '-' && argv[i][1]) {
-            if (argv[i][1] == '-') {
-#endif
-                /* -- = long flag */
+        if (flag_ok && LRG_IS_SWITCH(argv[i])) {
+            if (LRG_IS_LONG_SWITCH(argv[i])) {
+                /* -- = long flag/switch */
                 char *rest = argv[i] + 2;
-                if (!*rest) { /* "--" - end of flags */
+                if (!*rest) { /* "--" - end of flags/switches */
                     flag_ok = 0;
                     continue;
                 } else if (!strcmp(rest, "line-numbers")) {
