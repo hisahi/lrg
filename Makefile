@@ -12,6 +12,8 @@ ifneq ($(prefix),)
     PREFIX:=$(prefix)
 endif
 
+DESTDIR?=$(PREFIX)/bin
+
 .PHONY: all clean install
 
 all: lrg
@@ -27,7 +29,7 @@ clean:
 	rm lrg
 
 install:
-	cp lrg $(PREFIX)/bin/
+	cp lrg $(DESTDIR)/
 
 
 
